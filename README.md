@@ -12,13 +12,47 @@ High-performance Telegram bot for downloading videos from social media platforms
 
 ## Installation
 
+### Windows
+
+1. Download and run `deploy.bat`
+2. The script will:
+   - Clone the repository
+   - Set up Python environment
+   - Install dependencies
+   - Create necessary files
+3. Edit `.env` file with your tokens:
 ```bash
-git clone https://github.com/roninreilly/zenload.git
-cd zenload
-pip install -r requirements.txt
+TELEGRAM_BOT_TOKEN=your_bot_token
+YANDEX_MUSIC_TOKEN=your_yandex_token  # Optional
 ```
+4. Run `run.bat` to start the bot
+
+### Linux 
+
+1. Download and run `deploy.sh`:
+```bash
+wget https://raw.githubusercontent.com/RoninReilly/Zenload/main/deploy.sh
+chmod +x deploy.sh
+./deploy.sh
+```
+2. The script will:
+   - Clone the repository
+   - Set up Python environment
+   - Install dependencies
+   - Create systemd service
+   - Prompt for your tokens
+3. The bot will start automatically and run as a system service
 
 Optional: Add cookies/instagram.txt for enhanced Instagram functionality
+
+## Updates
+
+To update the bot to the latest version:
+
+- Windows: Run `deploy.bat` again
+- Linux: Run `./deploy.sh` again
+
+The scripts will automatically pull the latest changes and update everything.
 
 ## Usage
 
@@ -45,6 +79,8 @@ zenload/
 
 - Instagram (Reels, Posts)
 - TikTok
+- YouTube
+- Yandex Music
 
 ## Technical Details
 
