@@ -23,15 +23,20 @@ class BaseDownloader(ABC):
     def __init__(self):
         self.ydl_opts = YTDLP_OPTIONS.get(self.platform_id(), {}).copy()
         self._progress_callback = None
+        self._loop = None
 
     def set_progress_callback(self, callback: Callable[[str, int], None]):
         """Set callback for progress updates"""
         self._progress_callback = callback
+        self._loop = asyncio.get_running_loop()
 
     def update_progress(self, status: str, progress: int):
         """Update download progress"""
-        if self._progress_callback:
-            self._progress_callback(status, progress)
+        if self._progress_callback and self._loop:
+            asyncio.run_coroutine_threadsafe(
+                self._progress_callback(status, progress),
+                self._loop
+            )
 
     def _progress_hook(self, d: Dict[str, Any]):
         """Progress hook for yt-dlp"""

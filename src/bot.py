@@ -3,6 +3,8 @@ import logging.config
 from pathlib import Path
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, PreCheckoutQueryHandler, filters
 import signal
+import asyncio
+import sys
 
 from .config import TOKEN, LOGGING_CONFIG, BASE_DIR
 from .user_settings import UserSettingsManager
@@ -55,6 +57,7 @@ class ZenloadBot:
         )
         
         self._setup_handlers()
+        self._stopping = False
 
     def _setup_handlers(self):
         """Setup bot command and message handlers"""
@@ -84,19 +87,40 @@ class ZenloadBot:
         # Callback query handler
         self.application.add_handler(CallbackQueryHandler(self.callback_handlers.handle_callback))
 
-    async def _cleanup(self):
-        """Cleanup resources before shutdown"""
-        logger.info("Cleaning up resources...")
+    async def stop(self):
+        """Stop the bot gracefully"""
+        if self._stopping:
+            return
+        
+        self._stopping = True
+        logger.info("Stopping bot...")
+        
         try:
+            # Stop accepting new updates
+            if self.application.updater:
+                await self.application.updater.stop()
+            
+            # Cleanup download manager
             await self.download_manager.cleanup()
-            logger.info("Resources cleaned up successfully")
+            
+            # Stop application
+            if self.application.running:
+                await self.application.stop()
+                await self.application.shutdown()
+            
+            logger.info("Bot stopped successfully")
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            logger.error(f"Error stopping bot: {e}")
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
+        if self._stopping:
+            logger.info("Forced shutdown")
+            sys.exit(1)
+        
         logger.info(f"Received signal {signum}")
-        asyncio.run(self._cleanup())
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.stop())
 
     def run(self):
         """Start the bot"""
@@ -106,14 +130,15 @@ class ZenloadBot:
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         
-        self.application.run_polling(drop_pending_updates=True)
-
-
-
-
-
-
-
-
-
-
+        try:
+            self.application.run_polling(drop_pending_updates=True)
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("Bot stopped by user")
+        except Exception as e:
+            logger.error(f"Error running bot: {e}")
+            raise
+        finally:
+            # Ensure cleanup is performed
+            if not self._stopping:
+                loop = asyncio.get_event_loop()
+                loop.run_until_complete(self.stop())

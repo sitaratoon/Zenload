@@ -3,6 +3,7 @@ from telegram import Update, Chat
 from telegram.ext import ContextTypes
 import re
 from ..downloaders import DownloaderFactory
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +13,7 @@ class MessageHandlers:
         self.settings_manager = settings_manager
         self.download_manager = download_manager
         self.localization = localization
+        self._download_tasks = {}
 
     def get_message(self, user_id: int, key: str, **kwargs) -> str:
         """Get localized message"""
@@ -26,7 +28,6 @@ class MessageHandlers:
         # URL extraction with support for various URL formats
         urls = re.findall(r'https?://[^\s]+', text)
         return urls[0] if urls else None
-        
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle incoming messages with URLs"""
@@ -53,7 +54,7 @@ class MessageHandlers:
             
             # Process the URL if found
             if url:
-                await self._process_url(url, update, context)
+                asyncio.create_task(self._process_url(url, update, context))
             else:
                 # Try to send message without reply if we don't have admin rights
                 try:
@@ -62,8 +63,8 @@ class MessageHandlers:
                     )
                 except Exception:
                     await update.effective_chat.send_message(
-                    self.get_message(user_id, 'unsupported_url')
-                )
+                        self.get_message(user_id, 'unsupported_url')
+                    )
             return
 
         # Handle private chat messages (we already returned for non-private above)
@@ -76,7 +77,7 @@ class MessageHandlers:
         # Process URL
         url = self._extract_url(message_text)
         if url:
-            await self._process_url(url, update, context)
+            asyncio.create_task(self._process_url(url, update, context))
         else:
             await message.reply_text(self.get_message(user_id, 'unsupported_url'))
             
@@ -110,21 +111,25 @@ class MessageHandlers:
                 )
             except Exception:
                 # If can't reply (no admin rights), send without reply
-                await update.effective_chat.send_message(self.get_message(user_id, 'unsupported_url'))
+                await update.effective_chat.send_message(
+                    self.get_message(user_id, 'unsupported_url')
+                )
             return
 
         # Send initial status
-        status_message = await update.message.reply_text(
-            self.get_message(user_id, 'processing')
-        )
-
-        # If we couldn't send status message (no admin rights), try without reply
-        if not status_message:
+        try:
+            status_message = await update.message.reply_text(
+                self.get_message(user_id, 'processing')
+            )
+        except Exception:
+            # If can't reply (no admin rights), try without reply
             status_message = await update.effective_chat.send_message(
                 self.get_message(user_id, 'processing')
             )
-            if not status_message:
-                return  # Can't send messages at all
+
+        if not status_message:
+            return  # Can't send messages at all
+
         try:
             # Get available formats
             formats = await downloader.get_formats(url)
@@ -138,14 +143,26 @@ class MessageHandlers:
                 # Get user settings
                 settings = self.settings_manager.get_settings(user_id)
                 
-                # If default quality is set and not 'ask', use it
+                # If default quality is set and not 'ask', start download
                 if settings.default_quality != 'ask':
-                    await self.download_manager.process_download(
-                        downloader, 
-                        url, 
-                        update, 
-                        status_message, 
-                        settings.default_quality
+                    # Create download task
+                    download_task = asyncio.create_task(
+                        self.download_manager.process_download(
+                            downloader, 
+                            url, 
+                            update, 
+                            status_message, 
+                            settings.default_quality
+                        )
+                    )
+                    
+                    # Store task reference
+                    task_key = f"{user_id}:{url}"
+                    self._download_tasks[task_key] = download_task
+                    
+                    # Clean up task when done
+                    download_task.add_done_callback(
+                        lambda t: self._download_tasks.pop(task_key, None)
                     )
                     return
                 
@@ -156,7 +173,24 @@ class MessageHandlers:
                 )
             else:
                 # If no formats available, download with default settings
-                await self.download_manager.process_download(downloader, url, update, status_message)
+                # Create download task
+                download_task = asyncio.create_task(
+                    self.download_manager.process_download(
+                        downloader, 
+                        url, 
+                        update, 
+                        status_message
+                    )
+                )
+                
+                # Store task reference
+                task_key = f"{user_id}:{url}"
+                self._download_tasks[task_key] = download_task
+                
+                # Clean up task when done
+                download_task.add_done_callback(
+                    lambda t: self._download_tasks.pop(task_key, None)
+                )
 
         except Exception as e:
             try:
@@ -165,17 +199,7 @@ class MessageHandlers:
                 )
             except Exception:
                 await update.effective_chat.send_message(
-                self.get_message(user_id, 'error_occurred')
-            )
+                    self.get_message(user_id, 'error_occurred')
+                )
             logger.error(f"Unexpected error processing {url}: {e}")
             await status_message.delete()
-
-
-
-
-
-
-
-
-
-

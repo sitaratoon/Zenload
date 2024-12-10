@@ -9,24 +9,30 @@ import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import aiohttp
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 import time
+from collections import defaultdict
 
+# Configure logging to prevent duplicates
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 class DownloadWorker:
     """Worker class to handle individual downloads"""
-    def __init__(self, localization, settings_manager):
+    def __init__(self, localization, settings_manager, session: aiohttp.ClientSession):
         self.localization = localization
         self.settings_manager = settings_manager
-        self._status_queue = queue.Queue()
-        self._stop_event = threading.Event()
+        self.session = session
+        self._status_queue = asyncio.Queue()
+        self._stop_event = asyncio.Event()
         self._current_message: Optional[Message] = None
         self._current_user_id: Optional[int] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._last_status: Optional[str] = None
         self._last_progress: Optional[int] = None
-        self._update_thread: Optional[threading.Thread] = None
+        self._status_task: Optional[asyncio.Task] = None
+        self._last_update_time = 0
+        self._update_interval = 0.5  # Minimum time between status updates
 
     def get_message(self, user_id: int, key: str, **kwargs) -> str:
         """Get localized message"""
@@ -37,63 +43,59 @@ class DownloadWorker:
     async def update_status(self, message: Message, user_id: int, status_key: str, progress: int):
         """Update status message with current progress"""
         try:
+            # Rate limit status updates
+            current_time = time.time()
+            if current_time - self._last_update_time < self._update_interval:
+                return
+
             new_text = self.get_message(user_id, status_key, progress=progress)
             if new_text == self._last_status and progress == self._last_progress:
                 return
 
-            await message.edit_text(new_text)
-            self._last_status = new_text
-            self._last_progress = progress
-
-        except BadRequest as e:
-            if "Message is not modified" not in str(e):
-                logger.error(f"Error updating status: {e}")
+            try:
+                await asyncio.wait_for(message.edit_text(new_text), timeout=2.0)
+                self._last_status = new_text
+                self._last_progress = progress
+                self._last_update_time = current_time
+            except asyncio.TimeoutError:
+                logger.debug("Status update timed out, skipping")
+            except BadRequest as e:
+                if "Message is not modified" not in str(e):
+                    logger.error(f"Error updating status: {e}")
         except Exception as e:
             logger.error(f"Error updating status: {e}")
 
-    def _process_status_updates(self):
-        """Process status updates in a separate thread"""
-        while not self._stop_event.is_set():
-            try:
-                status, progress = self._status_queue.get(timeout=0.1)
-                if status == "STOP":
-                    break
+    async def _process_status_updates(self):
+        """Process status updates asynchronously"""
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    status, progress = await asyncio.wait_for(
+                        self._status_queue.get(),
+                        timeout=0.1
+                    )
+                    if status == "STOP":
+                        break
 
-                if self._current_message and self._current_user_id and self._loop:
-                    future = asyncio.run_coroutine_threadsafe(
-                        self.update_status(
+                    if self._current_message and self._current_user_id:
+                        await self.update_status(
                             self._current_message,
                             self._current_user_id,
                             status,
                             progress
-                        ),
-                        self._loop
-                    )
-                    try:
-                        future.result(timeout=3)
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Status update timed out: {status} {progress}%")
-                        self._clear_status_queue()
-                    except Exception as e:
-                        logger.warning(f"Status update failed: {e}")
+                        )
+                        self._status_queue.task_done()
+                except asyncio.TimeoutError:
+                    continue
+                except Exception as e:
+                    logger.error(f"Error processing status update: {e}")
+        except asyncio.CancelledError:
+            pass
 
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Error processing status update: {e}")
-
-    def _clear_status_queue(self):
-        """Clear the status update queue"""
-        while not self._status_queue.empty():
-            try:
-                self._status_queue.get_nowait()
-            except queue.Empty:
-                break
-
-    def progress_callback(self, status: str, progress: int):
-        """Sync callback for progress updates"""
+    async def progress_callback(self, status: str, progress: int):
+        """Async callback for progress updates"""
         try:
-            self._status_queue.put((status, progress))
+            await self._status_queue.put((status, progress))
         except Exception as e:
             logger.error(f"Error in progress callback: {str(e)}")
 
@@ -110,12 +112,11 @@ class DownloadWorker:
             self._last_progress = None
             self._current_message = status_message
             self._current_user_id = user_id
-            self._loop = asyncio.get_running_loop()
             self._stop_event.clear()
+            self._last_update_time = 0
             
-            # Start status update thread
-            self._update_thread = threading.Thread(target=self._process_status_updates)
-            self._update_thread.start()
+            # Start status update task
+            self._status_task = asyncio.create_task(self._process_status_updates())
             
             # Set up progress callback
             downloader.set_progress_callback(self.progress_callback)
@@ -170,16 +171,19 @@ class DownloadWorker:
             logger.error(f"Unexpected error processing {url}: {e}", exc_info=True)
 
         finally:
-            # Stop status update thread
+            # Stop status update task
             self._stop_event.set()
-            if self._update_thread and self._update_thread.is_alive():
-                self._status_queue.put(("STOP", 0))
-                self._update_thread.join(timeout=1)
+            if self._status_task:
+                await self._status_queue.put(("STOP", 0))
+                self._status_task.cancel()
+                try:
+                    await self._status_task
+                except asyncio.CancelledError:
+                    pass
 
             # Clear state
             self._current_message = None
             self._current_user_id = None
-            self._loop = None
             self._last_status = None
             self._last_progress = None
 
@@ -199,100 +203,138 @@ class DownloadWorker:
                 logger.error(f"Error deleting status message: {e}")
 
 class DownloadManager:
-    """Thread-safe download manager with connection pooling and rate limiting"""
-    def __init__(self, localization, settings_manager, max_concurrent_downloads=10, max_downloads_per_user=2):
+    """High-performance download manager with optimized concurrency"""
+    def __init__(self, localization, settings_manager, max_concurrent_downloads=50, max_downloads_per_user=5):
         self.localization = localization
         self.settings_manager = settings_manager
         self.max_concurrent_downloads = max_concurrent_downloads
         self.max_downloads_per_user = max_downloads_per_user
         
-        # Connection pool for external requests
-        self.session = aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(limit=max_concurrent_downloads)
-        )
-        
-        # Thread pool for download workers
-        self.thread_pool = ThreadPoolExecutor(max_workers=max_concurrent_downloads)
+        # Initialize as None, will create when needed
+        self.connector = None
+        self.session = None
+        self._initialized = False
         
         # Active downloads tracking
-        self.active_downloads: Dict[int, Dict[str, DownloadWorker]] = {}
-        self._downloads_lock = threading.Lock()
+        self.active_downloads: Dict[int, Dict[str, asyncio.Task]] = defaultdict(dict)
+        self._downloads_lock = None
         
-        # Rate limiting
-        self.rate_limit = 5  # requests per second
-        self.rate_limit_period = 1.0  # seconds
-        self._last_request_times = []
-        self._rate_limit_lock = threading.Lock()
+        # Download queue
+        self.download_queue = None
+        self._queue_processor_task = None
+        self._queue_processor_running = False
+        
+        # Rate limiting per domain
+        self.rate_limits: Dict[str, asyncio.Semaphore] = defaultdict(
+            lambda: asyncio.Semaphore(10)  # Increased from 5 to 10
+        )
 
-    async def _check_rate_limit(self):
-        """Check and enforce rate limiting"""
-        current_time = time.time()
-        with self._rate_limit_lock:
-            # Remove old requests
-            self._last_request_times = [t for t in self._last_request_times 
-                                      if current_time - t <= self.rate_limit_period]
+    async def _ensure_initialized(self):
+        """Ensure manager is initialized with event loop"""
+        if not self._initialized:
+            self.connector = aiohttp.TCPConnector(
+                limit=self.max_concurrent_downloads,
+                limit_per_host=20,  # Increased from 10 to 20
+                enable_cleanup_closed=True,
+                force_close=True,
+                ttl_dns_cache=300
+            )
             
-            if len(self._last_request_times) >= self.rate_limit:
-                # Wait if rate limit exceeded
-                oldest_time = self._last_request_times[0]
-                wait_time = self.rate_limit_period - (current_time - oldest_time)
-                if wait_time > 0:
-                    await asyncio.sleep(wait_time)
+            self.session = aiohttp.ClientSession(
+                connector=self.connector,
+                timeout=aiohttp.ClientTimeout(total=300),
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            )
             
-            self._last_request_times.append(current_time)
+            self._downloads_lock = asyncio.Lock()
+            self.download_queue = asyncio.PriorityQueue()
+            
+            # Start queue processor
+            self._queue_processor_running = True
+            self._queue_processor_task = asyncio.create_task(self._process_queue())
+            self._initialized = True
+
+    async def _process_queue(self):
+        """Process the download queue"""
+        while self._queue_processor_running:
+            try:
+                _, worker, args = await self.download_queue.get()
+                try:
+                    await worker.process_download(*args)
+                finally:
+                    self.download_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error processing download queue: {e}")
 
     async def process_download(self, downloader, url: str, update: Update, status_message: Message, format_id: str = None) -> None:
-        """Process download request with rate limiting and connection pooling"""
+        """Process download request with optimized performance"""
+        await self._ensure_initialized()
+        
         user_id = update.effective_user.id
         
-        # Check rate limit
-        await self._check_rate_limit()
-        
-        # Create new worker for this download
-        worker = DownloadWorker(self.localization, self.settings_manager)
-        
-        with self._downloads_lock:
-            # Initialize user's downloads dict if not exists
-            if user_id not in self.active_downloads:
-                self.active_downloads[user_id] = {}
-            
-            # Clean up completed downloads for this user
-            self.active_downloads[user_id] = {
-                url: w for url, w in self.active_downloads[user_id].items()
-                if not w._stop_event.is_set()
-            }
+        async with self._downloads_lock:
+            # Clean up completed downloads
+            for uid, downloads in list(self.active_downloads.items()):
+                self.active_downloads[uid] = {
+                    url: task for url, task in downloads.items()
+                    if not task.done()
+                }
+                if not self.active_downloads[uid]:
+                    del self.active_downloads[uid]
             
             # Check user's concurrent downloads limit
-            if len(self.active_downloads[user_id]) >= self.max_downloads_per_user:
+            if len(self.active_downloads.get(user_id, {})) >= self.max_downloads_per_user:
                 await status_message.edit_text(
-                    worker.get_message(user_id, 'error_too_many_downloads')
+                    DownloadWorker(self.localization, self.settings_manager, self.session).get_message(
+                        user_id, 'error_too_many_downloads'
+                    )
                 )
                 return
             
-            # Add to active downloads
-            self.active_downloads[user_id][url] = worker
-        
-        try:
-            # Process download
-            await worker.process_download(downloader, url, update, status_message, format_id)
-        finally:
-            # Cleanup
-            with self._downloads_lock:
-                if user_id in self.active_downloads and url in self.active_downloads[user_id]:
-                    del self.active_downloads[user_id][url]
-                    if not self.active_downloads[user_id]:
-                        del self.active_downloads[user_id]
+            # Create worker and queue download
+            worker = DownloadWorker(self.localization, self.settings_manager, self.session)
+            priority = len(self.active_downloads.get(user_id, {}))  # Lower number = higher priority
+            
+            await self.download_queue.put((
+                priority,
+                worker,
+                (downloader, url, update, status_message, format_id)
+            ))
 
     async def cleanup(self):
         """Cleanup resources on shutdown"""
-        # Stop all active downloads
-        with self._downloads_lock:
-            for user_downloads in self.active_downloads.values():
-                for worker in user_downloads.values():
-                    worker._stop_event.set()
+        if not self._initialized:
+            return
+            
+        # Stop queue processor
+        self._queue_processor_running = False
+        if self._queue_processor_task:
+            self._queue_processor_task.cancel()
+            try:
+                await self._queue_processor_task
+            except asyncio.CancelledError:
+                pass
         
-        # Close connection pool
-        await self.session.close()
+        # Wait for queue to empty
+        if self.download_queue:
+            try:
+                await self.download_queue.join()
+            except Exception:
+                pass
         
-        # Shutdown thread pool
-        self.thread_pool.shutdown(wait=True)
+        # Cancel all active downloads
+        if self._downloads_lock:
+            async with self._downloads_lock:
+                for downloads in self.active_downloads.values():
+                    for task in downloads.values():
+                        task.cancel()
+        
+        # Close session
+        if self.session:
+            await self.session.close()
+            
+        self._initialized = False

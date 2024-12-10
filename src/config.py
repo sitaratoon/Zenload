@@ -71,14 +71,16 @@ LOGGING_CONFIG = {
     'disable_existing_loggers': True,
     'formatters': {
         'standard': {
-            'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            'datefmt': '%Y-%m-%d %H:%M:%S'
         }
     },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'standard',
-            'level': 'INFO'
+            'level': 'INFO',
+            'stream': 'ext://sys.stdout'
         },
         'file': {
             'class': 'logging.FileHandler',
@@ -89,28 +91,39 @@ LOGGING_CONFIG = {
     },
     'loggers': {
         'src': {
-            'handlers': ['console', 'file'],
+            'handlers': ['console'],
             'level': 'INFO',
-            'propagate': True
+            'propagate': False
         },
         'src.downloaders': {
-            'handlers': ['console', 'file'],
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False
+        },
+        'src.utils': {
+            'handlers': ['console'],
             'level': 'INFO',
             'propagate': False
         },
         'telegram': {
             'level': 'WARNING',
-            'propagate': True
+            'propagate': False
         },
         'httpx': {
             'level': 'WARNING',
-            'propagate': True
+            'propagate': False
+        },
+        'httpcore': {
+            'level': 'WARNING',
+            'propagate': False
+        },
+        'aiohttp': {
+            'level': 'WARNING',
+            'propagate': False
         }
+    },
+    'root': {
+        'level': 'WARNING',
+        'handlers': ['console']
     }
 }
-
-
-
-
-
-
