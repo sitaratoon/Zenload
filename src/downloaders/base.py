@@ -1,6 +1,7 @@
 import os
 import logging
 import re
+import asyncio
 from typing import Tuple, Dict, List, Callable, Any
 from pathlib import Path
 from abc import ABC, abstractmethod
@@ -64,32 +65,38 @@ class BaseDownloader(ABC):
         """Preprocess URL before downloading. Override if needed."""
         return url
 
-    def get_formats(self, url: str) -> List[Dict]:
+    async def get_formats(self, url: str) -> List[Dict]:
         """Get available formats for the content"""
         try:
             self.update_progress('status_getting_info', 0)
             url = self.preprocess_url(url)
-            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-                self.update_progress('status_getting_info', 30)
-                info = ydl.extract_info(url, download=False)
-                self.update_progress('status_getting_info', 60)
-                formats = []
-                if 'formats' in info:
-                    seen = set()
-                    for f in info['formats']:
-                        if 'height' in f and f['height']:
-                            quality = f"{f['height']}p"
-                            if quality not in seen:
-                                formats.append({
-                                    'id': f['format_id'],
-                                    'quality': quality,
-                                    'ext': f.get('ext', 'mp4')
-                                })
-                                seen.add(quality)
-                self.update_progress('status_getting_info', 100)
-                return sorted(formats, key=lambda x: int(x['quality'][:-1]), reverse=True)
+            logger.info(f"Getting formats for URL: {url}")
+
+            def extract_info():
+                with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                    self.update_progress('status_getting_info', 30)
+                    logger.info("Attempting to extract info with yt-dlp")
+                    return ydl.extract_info(url, download=False)
+
+            info = await asyncio.to_thread(extract_info)
+            self.update_progress('status_getting_info', 60)
+            formats = []
+            if info and 'formats' in info:
+                seen = set()
+                for f in info['formats']:
+                    if 'height' in f and f['height']:
+                        quality = f"{f['height']}p"
+                        if quality not in seen:
+                            formats.append({
+                                'id': f['format_id'],
+                                'quality': quality,
+                                'ext': f.get('ext', 'mp4')
+                            })
+                            seen.add(quality)
+            self.update_progress('status_getting_info', 100)
+            return sorted(formats, key=lambda x: int(x['quality'][:-1]), reverse=True)
         except Exception as e:
-            logger.error(f"Error getting formats: {e}")
+            logger.error(f"Error getting formats: {str(e)}", exc_info=True)
             return []
 
     def format_metadata(self, info: Dict) -> str:
@@ -130,6 +137,7 @@ class BaseDownloader(ABC):
         try:
             self.update_progress('status_downloading', 0)
             url = self.preprocess_url(url)
+            logger.info(f"Starting download for URL: {url}")
             temp_filename = f"temp_{self.platform_id()}_{os.urandom(4).hex()}"
             self.ydl_opts['outtmpl'] = str(DOWNLOADS_DIR / f"{temp_filename}.%(ext)s")
             
@@ -137,43 +145,46 @@ class BaseDownloader(ABC):
                 self.ydl_opts['format'] = format_id
 
             # Add progress hook
-            self.ydl_opts['progress_hooks'] = [self._progress_hook]
+            logger.info(f"Using yt-dlp options: {self.ydl_opts}")
+            self.ydl_opts['progress_hooks'] = [lambda d: self._progress_hook(d)]
 
-            # Download content
-            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                try:
-                    info = ydl.extract_info(url, download=True)
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    if 'login' in error_msg or 'cookie' in error_msg:
-                        raise DownloadError("Authentication required. Content may be private.")
-                    elif 'not found' in error_msg or '404' in error_msg:
-                        raise DownloadError("Content not found. It may have been deleted or is unavailable.")
-                    else:
-                        logger.error(f"Download error for {url}: {e}")
-                        raise DownloadError(f"Download error: {str(e)}")
+            def download_content():
+                with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+                    return ydl.extract_info(url, download=True)
 
-                if not info:
-                    raise DownloadError("Failed to get content information")
+            try:
+                info = await asyncio.to_thread(download_content)
+            except Exception as e:
+                error_msg = str(e).lower()
+                if 'login' in error_msg or 'cookie' in error_msg:
+                    raise DownloadError("Authentication required. Content may be private.")
+                elif 'not found' in error_msg or '404' in error_msg:
+                    raise DownloadError("Content not found. It may have been deleted or is unavailable.")
+                else:
+                    logger.error(f"Download error for {url}: {str(e)}", exc_info=True)
+                    raise DownloadError(f"Download error: {str(e)}")
 
-                # Find downloaded file
-                downloaded_file = None
-                for file in DOWNLOADS_DIR.glob(f"{temp_filename}.*"):
-                    if file.is_file():
-                        downloaded_file = file
-                        break
+            if not info:
+                raise DownloadError("Failed to get content information")
 
-                if not downloaded_file:
-                    raise DownloadError("File was downloaded but not found in the system")
+            # Find downloaded file
+            downloaded_file = None
+            for file in DOWNLOADS_DIR.glob(f"{temp_filename}.*"):
+                if file.is_file():
+                    downloaded_file = file
+                    break
 
-                self.update_progress('status_downloading', 100)
+            if not downloaded_file:
+                raise DownloadError("File was downloaded but not found in the system")
 
-                # Format metadata and return
-                metadata = self.format_metadata(info)
-                return metadata, downloaded_file
+            self.update_progress('status_downloading', 100)
+
+            # Format metadata and return
+            metadata = self.format_metadata(info)
+            return metadata, downloaded_file
 
         except DownloadError:
             raise
         except Exception as e:
-            logger.error(f"Unexpected error downloading {url}: {str(e)}")
+            logger.error(f"Unexpected error downloading {url}: {str(e)}", exc_info=True)
             raise DownloadError(f"Download error: {str(e)}")

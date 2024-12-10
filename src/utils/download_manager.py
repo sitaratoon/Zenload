@@ -63,7 +63,7 @@ class DownloadManager:
                             progress
                         ),
                         self._loop
-                    )
+                    ).add_done_callback(lambda f: f.result())
                     future.result(timeout=5)  # Increased timeout
             except queue.Empty:
                 continue
@@ -73,7 +73,10 @@ class DownloadManager:
     def progress_callback(self, status: str, progress: int):
         """Sync callback for progress updates"""
         try:
-            self._update_queue.put((status, progress))
+            if self._current_message and self._current_user_id and self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.update_status(self._current_message, self._current_user_id, status, progress),
+                    self._loop)
         except Exception as e:
             logger.error(f"Error in progress callback: {str(e)}")
 
@@ -95,7 +98,7 @@ class DownloadManager:
             self._last_progress = None
             self._current_message = status_message
             self._current_user_id = user_id
-            self._loop = asyncio.get_event_loop()
+            self._loop = asyncio.get_running_loop()
             
             # Start update processing thread
             self._update_thread = threading.Thread(target=self._process_updates)
@@ -168,4 +171,5 @@ class DownloadManager:
                 logger.info("Status message deleted")
             except Exception as e:
                 logger.error(f"Error deleting status message: {e}")
+
 

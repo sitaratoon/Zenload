@@ -88,7 +88,10 @@ LOCALES: Dict[str, Dict[str, str]] = {
         'status_getting_info': "Получение информации... ({progress}%)",
         'status_downloading': "Загрузка видео... ({progress}%)",
         'status_processing': "Обработка видео... ({progress}%)",
-        'status_sending': "Отправка в Telegram... ({progress}%)"
+        'status_sending': "Отправка в Telegram... ({progress}%)",
+        'admin_only': "Только администраторы могут изменять настройки группы",
+        'group_settings_menu': "Настройки группы\n\nЯзык: {language}\nКачество: {quality}",
+        'settings_unchanged': "Настройки не изменились"
     },
     'en': {
         'welcome': (
@@ -176,7 +179,10 @@ LOCALES: Dict[str, Dict[str, str]] = {
         'status_getting_info': "Getting information... ({progress}%)",
         'status_downloading': "Downloading video... ({progress}%)",
         'status_processing': "Processing video... ({progress}%)",
-        'status_sending': "Sending to Telegram... ({progress}%)"
+        'status_sending': "Sending to Telegram... ({progress}%)",
+        'admin_only': "Only administrators can modify group settings",
+        'group_settings_menu': "Group Settings\n\nLanguage: {language}\nQuality: {quality}",
+        'settings_unchanged': "Settings remain unchanged"
     }
 }
 
@@ -197,3 +203,7 @@ class Localization:
                 return text.format(**kwargs) if kwargs else text
             except (KeyError, ValueError):
                 return f"Missing translation: {key}"
+
+
+
+

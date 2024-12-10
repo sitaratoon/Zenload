@@ -1,15 +1,53 @@
 import re
+import os
+import logging
+import asyncio
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any
 from urllib.parse import urlparse
-from .base import BaseDownloader
+import yt_dlp
+from .base import BaseDownloader, DownloadError
 
+logger = logging.getLogger(__name__)
 
 class TikTokDownloader(BaseDownloader):
     def platform_id(self) -> str:
         return 'tiktok'
 
+    def __init__(self):
+        super().__init__()
+        self.cookie_file = Path(__file__).parent.parent.parent / "cookies" / "tiktok.txt"
+        self.ydl_opts['cookiefile'] = str(self.cookie_file)
+
+    def _get_ydl_opts(self, format_id: Optional[str] = None) -> Dict:
+        """Get yt-dlp options"""
+        opts = {
+            'format': format_id if format_id else 'best',
+            'nooverwrites': True,
+            'no_color': True,
+            'no_warnings': True,
+            'quiet': False,  # Show download progress
+            'extract_flat': False,
+            'progress_hooks': [self._progress_hook],  # Add progress hook
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+            },
+            'extractor_args': {
+                'TikTok': {
+                    'api_hostname': 'api16-normal-c-useast1a.tiktokv.com'
+                }
+            }
+        }
+        if self.cookie_file.exists():
+            opts['cookiefile'] = str(self.cookie_file)
+        return opts
+
     def can_handle(self, url: str) -> bool:
         """Check if URL is from TikTok"""
         parsed = urlparse(url)
+        logger.info(f"Checking TikTok URL: {url} | Parsed netloc: {parsed.netloc}")
         return bool(
             parsed.netloc and
             any(domain in parsed.netloc.lower() 
@@ -18,11 +56,11 @@ class TikTokDownloader(BaseDownloader):
 
     def preprocess_url(self, url: str) -> str:
         """Clean and validate TikTok URL"""
-        # Handle mobile share URLs
+        logger.info(f"Preprocessing TikTok URL: {url}")
         if 'vm.tiktok.com' in url:
-            return url  # yt-dlp handles URL redirection automatically
+            logger.info("Detected mobile share URL (vm.tiktok.com)")
+            return url
         
-        # Extract video ID from URL
         patterns = [
             r'tiktok\.com/@[^/]+/video/(\d+)',
             r'tiktok\.com/t/([^/?]+)',
@@ -31,22 +69,138 @@ class TikTokDownloader(BaseDownloader):
         for pattern in patterns:
             if match := re.search(pattern, url):
                 video_id = match.group(1)
+                logger.info(f"Extracted video ID: {video_id} using pattern: {pattern}")
                 if video_id.isdigit():
-                    return f'https://www.tiktok.com/video/{video_id}'
-                return f'https://www.tiktok.com/t/{video_id}'
+                    processed_url = url.split('?')[0]
+                else:
+                    processed_url = f'https://www.tiktok.com/t/{video_id}'
+                logger.info(f"Processed URL: {processed_url}")
+                return processed_url
         
+        logger.warning(f"No patterns matched URL: {url}, using as is")
         return url
 
-    def get_title(self, info: dict) -> str:
-        """Get meaningful title for TikTok content"""
-        if title := info.get('title'):
-            return title
-        
-        # Construct title from author and ID
-        author = info.get('uploader', '')
-        video_id = info.get('id', '')
-        
-        if author and video_id:
-            return f"{author}_video_{video_id}"
-            
-        return f"tiktok_video_{video_id or os.urandom(4).hex()}"
+    async def get_formats(self, url: str) -> List[Dict]:
+        """Get available formats for URL"""
+        try:
+            self.update_progress('status_getting_info', 0)
+            processed_url = self.preprocess_url(url)
+            logger.info(f"Getting formats for URL: {processed_url}")
+
+            # Configure yt-dlp options
+            ydl_opts = self._get_ydl_opts()
+            self.update_progress('status_getting_info', 30)
+
+            def extract_info():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    logger.info("Attempting to extract info with yt-dlp")
+                    return ydl.extract_info(processed_url, download=False)
+
+            info = await asyncio.to_thread(extract_info)
+            self.update_progress('status_getting_info', 60)
+
+            if not info:
+                raise DownloadError("Failed to get video information")
+
+            formats = []
+            if 'formats' in info:
+                seen = set()
+                for f in info['formats']:
+                    if 'height' in f and f['height']:
+                        quality = f"{f['height']}p"
+                        if quality not in seen:
+                            formats.append({
+                                'id': f['format_id'],
+                                'quality': quality,
+                                'ext': f.get('ext', 'mp4')
+                            })
+                            seen.add(quality)
+
+            self.update_progress('status_getting_info', 100)
+            return sorted(formats, key=lambda x: int(x['quality'][:-1]), reverse=True)
+
+        except Exception as e:
+            logger.error(f"Error getting formats: {str(e)}", exc_info=True)
+            raise DownloadError(f"Failed to get formats: {str(e)}")
+
+    def _progress_hook(self, d: Dict[str, Any]):
+        """Progress hook for yt-dlp"""
+        if d['status'] == 'downloading':
+            try:
+                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                downloaded = d.get('downloaded_bytes', 0)
+                if total > 0:
+                    # Scale progress between 20-90% to leave room for pre/post processing
+                    progress = int((downloaded / total) * 70) + 20
+                    self.update_progress('status_downloading', progress)
+            except Exception as e:
+                logger.error(f"Error in progress hook: {e}")
+
+    async def download(self, url: str, format_id: Optional[str] = None) -> Tuple[str, Path]:
+        """Download video from URL"""
+        try:
+            self.update_progress('status_downloading', 0)
+            processed_url = self.preprocess_url(url)
+            logger.info(f"Starting download for URL: {processed_url}")
+
+            # Create download directory if not exists
+            download_dir = Path(__file__).parent.parent.parent / "downloads"
+            download_dir.mkdir(exist_ok=True)
+            download_dir = download_dir.resolve()
+            logger.info(f"Download directory: {download_dir}")
+
+            # Configure yt-dlp options
+            ydl_opts = self._get_ydl_opts(format_id)
+            temp_filename = f"temp_{self.platform_id()}_{os.urandom(4).hex()}"
+            ydl_opts['outtmpl'] = str(download_dir / f"{temp_filename}.%(ext)s")
+
+            self.update_progress('status_downloading', 10)
+            logger.info(f"Using yt-dlp options: {ydl_opts}")
+
+            def download_content():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    return ydl.extract_info(processed_url, download=True)
+
+            try:
+                self.update_progress('status_downloading', 20)
+                info = await asyncio.to_thread(download_content)
+            except Exception as e:
+                error_msg = str(e).lower()
+                if 'login' in error_msg or 'cookie' in error_msg:
+                    raise DownloadError("Authentication required. Content may be private.")
+                elif 'not found' in error_msg or '404' in error_msg:
+                    raise DownloadError("Content not found. It may have been deleted or is unavailable.")
+                else:
+                    logger.error(f"Download error for {url}: {str(e)}", exc_info=True)
+                    raise DownloadError(f"Download error: {str(e)}")
+
+            if not info:
+                raise DownloadError("Failed to get content information")
+
+            # Find downloaded file
+            downloaded_file = None
+            for file in download_dir.glob(f"{temp_filename}.*"):
+                if file.is_file():
+                    downloaded_file = file
+                    break
+
+            if not downloaded_file:
+                raise DownloadError("File was downloaded but not found in the system")
+
+            logger.info(f"Downloaded to: {downloaded_file}")
+
+            # Generate clean metadata
+            metadata = info.get('title', 'Untitled')
+            if info.get('view_count'):
+                metadata += f"\nViews: {info['view_count']:,}"
+            if info.get('like_count'):
+                metadata += f"\nLikes: {info['like_count']:,}"
+
+            self.update_progress('status_downloading', 100)
+            return metadata, downloaded_file
+
+        except DownloadError:
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error downloading {url}: {str(e)}", exc_info=True)
+            raise DownloadError(f"Download error: {str(e)}")

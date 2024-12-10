@@ -12,6 +12,13 @@ class UserSettings:
     language: str = 'ru'  # Default to Russian
     default_quality: str = 'ask'  # 'ask' or 'best'
 
+@dataclass
+class GroupSettings:
+    group_id: int
+    admin_id: int  # ID of the admin who configured the settings
+    language: str = 'ru'
+    default_quality: str = 'ask'
+
 class UserSettingsManager:
     def __init__(self, db_path: Path):
         """Initialize settings manager with SQLite database"""
@@ -23,6 +30,7 @@ class UserSettingsManager:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                # User settings table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS user_settings (
                         user_id INTEGER PRIMARY KEY,
@@ -32,16 +40,50 @@ class UserSettingsManager:
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
+                
+                # Group settings table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS group_settings (
+                        group_id INTEGER PRIMARY KEY,
+                        admin_id INTEGER NOT NULL,
+                        language TEXT NOT NULL DEFAULT 'ru',
+                        default_quality TEXT NOT NULL DEFAULT 'ask',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (admin_id) REFERENCES user_settings(user_id)
+                    )
+                ''')
                 conn.commit()
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
             raise
 
-    def get_settings(self, user_id: int) -> UserSettings:
-        """Get settings for user, create default if not exists"""
+    def get_settings(self, user_id: int, chat_id: Optional[int] = None, is_admin: bool = False) -> UserSettings:
+        """
+        Get settings based on context:
+        - If chat_id is None, return user's personal settings
+        - If chat_id is provided, return group settings if they exist, otherwise user's settings
+        """
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                
+                # If this is a group chat
+                if chat_id and chat_id < 0:  # Telegram group IDs are negative
+                    cursor.execute(
+                        "SELECT language, default_quality FROM group_settings WHERE group_id = ?",
+                        (chat_id,)
+                    )
+                    group_settings = cursor.fetchone()
+                    
+                    if group_settings:
+                        return UserSettings(
+                            user_id=user_id,
+                            language=group_settings[0],
+                            default_quality=group_settings[1]
+                        )
+                
+                # Get or create user settings
                 cursor.execute(
                     "SELECT language, default_quality FROM user_settings WHERE user_id = ?",
                     (user_id,)
@@ -68,13 +110,49 @@ class UserSettingsManager:
             logger.error(f"Failed to get settings for user {user_id}: {e}")
             return UserSettings(user_id=user_id)  # Return defaults on error
 
-    def update_settings(self, user_id: int, **kwargs) -> UserSettings:
-        """Update specific settings for user"""
+    def update_settings(self, user_id: int, chat_id: Optional[int] = None, is_admin: bool = False, **kwargs) -> UserSettings:
+        """Update settings based on context"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # Build update query dynamically based on provided kwargs
+                # If this is a group chat and user is admin
+                if chat_id and chat_id < 0 and is_admin:
+                    valid_fields = {'language', 'default_quality'}
+                    update_fields = {k: v for k, v in kwargs.items() if k in valid_fields}
+                    
+                    if update_fields:
+                        cursor.execute(
+                            "SELECT 1 FROM group_settings WHERE group_id = ?",
+                            (chat_id,)
+                        )
+                        exists = cursor.fetchone()
+                        
+                        if exists:
+                            # Update existing group settings
+                            query = "UPDATE group_settings SET " + \
+                                   ", ".join(f"{k} = ?" for k in update_fields.keys()) + \
+                                   ", updated_at = CURRENT_TIMESTAMP " + \
+                                   "WHERE group_id = ?"
+                            cursor.execute(query, (*update_fields.values(), chat_id))
+                        else:
+                            # Create new group settings
+                            settings = GroupSettings(
+                                group_id=chat_id,
+                                admin_id=user_id,
+                                **kwargs
+                            )
+                            cursor.execute(
+                                """INSERT INTO group_settings 
+                                   (group_id, admin_id, language, default_quality) 
+                                   VALUES (?, ?, ?, ?)""",
+                                (chat_id, user_id, settings.language, settings.default_quality)
+                            )
+                        
+                        conn.commit()
+                        return self.get_settings(user_id, chat_id, is_admin)
+                
+                # Update user settings
                 valid_fields = {'language', 'default_quality'}
                 update_fields = {k: v for k, v in kwargs.items() if k in valid_fields}
                 
@@ -102,3 +180,18 @@ class UserSettingsManager:
         except Exception as e:
             logger.error(f"Failed to update settings for user {user_id}: {e}")
             return self.get_settings(user_id)
+
+    def get_group_admin(self, group_id: int) -> Optional[int]:
+        """Get the admin ID for a group if settings exist"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT admin_id FROM group_settings WHERE group_id = ?",
+                    (group_id,)
+                )
+                result = cursor.fetchone()
+                return result[0] if result else None
+        except Exception as e:
+            logger.error(f"Failed to get admin for group {group_id}: {e}")
+            return None
