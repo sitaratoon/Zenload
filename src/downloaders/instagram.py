@@ -77,7 +77,16 @@ class InstagramDownloader(BaseDownloader):
             logger.info(f"[Instagram] Getting formats for: {resolved_url}")
 
             self.update_progress('status_getting_info', 30)
-            with yt_dlp.YoutubeDL(self._get_ydl_opts()) as ydl:
+            # Create download directory if not exists
+            download_dir = Path(__file__).parent.parent.parent / "downloads"
+            download_dir.mkdir(exist_ok=True)
+            
+            # Configure yt-dlp options with output template
+            ydl_opts = self._get_ydl_opts()
+            ydl_opts.update({
+                'outtmpl': str(download_dir / '%(id)s.%(ext)s'),
+            })
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 self.update_progress('status_getting_info', 50)
                 info = await asyncio.to_thread(
                     ydl.extract_info, resolved_url, True
@@ -184,3 +193,4 @@ class InstagramDownloader(BaseDownloader):
                     self.update_progress('status_downloading', progress)
             except Exception as e:
                 logger.error(f"Error in progress hook: {e}")
+
