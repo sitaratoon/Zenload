@@ -17,12 +17,39 @@ prompt_env_vars() {
     fi
 }
 
-# Check for Python and Git
-command -v python3 >/dev/null 2>&1 || { echo "Python 3 is required. Install it with: sudo apt update && sudo apt install python3 python3-venv"; exit 1; }
-command -v git >/dev/null 2>&1 || { echo "Git is required. Install it with: sudo apt install git"; exit 1; }
+# Check and install required packages
+install_requirements() {
+    echo "Checking and installing required packages..."
+    if ! command -v python3 >/dev/null 2>&1; then
+        sudo apt update
+        sudo apt install -y python3
+    fi
+    
+    if ! command -v python3 -m venv >/dev/null 2>&1; then
+        sudo apt update
+        sudo apt install -y python3-venv
+    fi
+    
+    if ! command -v git >/dev/null 2>&1; then
+        sudo apt update
+        sudo apt install -y git
+    fi
+}
+
+# Install requirements first
+install_requirements
+
+# Set up project directory
+INSTALL_DIR="/opt/zenload"
+echo "Setting up project in $INSTALL_DIR..."
+
+# Create and switch to install directory
+sudo mkdir -p $INSTALL_DIR
+sudo chown $USER:$USER $INSTALL_DIR
+cd $INSTALL_DIR
 
 # Clone or update repository
-if [ ! -d ".git" ]; then
+if [ ! -d "$INSTALL_DIR/.git" ]; then
     echo "Cloning Zenload repository..."
     git clone https://github.com/RoninReilly/Zenload.git .
 else
@@ -31,12 +58,12 @@ else
 fi
 
 # Setup virtual environment
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
-fi
+echo "Setting up Python virtual environment..."
+python3 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
+echo "Installing dependencies..."
 pip install -r requirements.txt
 
 # Create systemd service file
@@ -50,9 +77,9 @@ After=network.target
 [Service]
 Type=simple
 User=$USER
-WorkingDirectory=$(pwd)
-Environment=PATH=$(pwd)/venv/bin:$PATH
-ExecStart=$(pwd)/venv/bin/python main.py
+WorkingDirectory=$INSTALL_DIR
+Environment=PATH=$INSTALL_DIR/venv/bin:$PATH
+ExecStart=$INSTALL_DIR/venv/bin/python $INSTALL_DIR/main.py
 Restart=always
 RestartSec=10
 
@@ -74,9 +101,7 @@ if [ ! -f ".env" ]; then
 fi
 
 # Create service and start bot
-if [ ! -f "/etc/systemd/system/zenload.service" ]; then
-    create_service
-fi
+create_service
 
 # If service exists and we're updating, restart it
 if systemctl is-active --quiet zenload; then
@@ -102,7 +127,7 @@ The bot will automatically:
 - Log all output to system journal
 
 To update environment variables:
-1. Edit .env file
+1. Edit $INSTALL_DIR/.env file
 2. Restart service: sudo systemctl restart zenload
 "
 
@@ -113,5 +138,6 @@ if ! systemctl is-active --quiet zenload; then
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         sudo systemctl start zenload
         echo "Bot started! Check status with: sudo systemctl status zenload"
+        echo "View logs with: sudo journalctl -u zenload -f"
     fi
 fi
