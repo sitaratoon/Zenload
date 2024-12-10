@@ -128,21 +128,33 @@ class DownloadManager:
             
             # Sending phase
             await self.update_status(status_message, user_id, 'status_sending', 0)
-            logger.info("Sending video to Telegram...")
+            logger.info("Sending file to Telegram...")
             
-            with open(file_path, 'rb') as video_file:
-                await update.effective_message.reply_video(
-                    video=video_file,
-                    caption=metadata,
-                    parse_mode='HTML',
-                    supports_streaming=True,
-                    read_timeout=60,
-                    write_timeout=60,
-                    connect_timeout=60,
-                    pool_timeout=60
-                )
+            with open(file_path, 'rb') as file:
+                # Check file extension to determine sending method
+                if file_path.suffix.lower() in ['.mp3', '.m4a', '.wav']:
+                    await update.effective_message.reply_audio(
+                        audio=file,
+                        caption=metadata,
+                        parse_mode='HTML',
+                        read_timeout=60,
+                        write_timeout=60,
+                        connect_timeout=60,
+                        pool_timeout=60
+                    )
+                else:
+                    await update.effective_message.reply_video(
+                        video=file,
+                        caption=metadata,
+                        parse_mode='HTML',
+                        supports_streaming=True,
+                        read_timeout=60,
+                        write_timeout=60,
+                        connect_timeout=60,
+                        pool_timeout=60
+                    )
             await self.update_status(status_message, user_id, 'status_sending', 100)
-            logger.info("Video sent successfully")
+            logger.info("File sent successfully")
 
         except DownloadError as e:
             error_message = str(e)
@@ -190,6 +202,7 @@ class DownloadManager:
                 logger.info("Status message deleted")
             except Exception as e:
                 logger.error(f"Error deleting status message: {e}")
+
 
 
 

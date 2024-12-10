@@ -3,3 +3,4 @@ yt-dlp>=2023.12.30
 python-dotenv>=1.0.0
 requests>=2.31.0
 instaloader>=4.10.1
+yandex-music>=2.1.1

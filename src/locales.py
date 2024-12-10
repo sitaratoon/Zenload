@@ -5,9 +5,10 @@ LOCALES: Dict[str, Dict[str, str]] = {
     'ru': {
         'welcome': (
             "Zenload\n\n"
-            "Отправьте ссылку на видео с:\n"
+            "Отправьте ссылку на видео или музыку с:\n"
             "• Instagram\n"
-            "• TikTok\n\n"
+            "• TikTok\n"
+            "• Yandex Music\n\n"
             "Команды:\n"
             "/settings - Настройки\n"
             "/help - Помощь\n"
@@ -37,7 +38,8 @@ LOCALES: Dict[str, Dict[str, str]] = {
             "Неподдерживаемая ссылка\n\n"
             "Поддерживаются:\n"
             "• Instagram\n"
-            "• TikTok"
+            "• TikTok\n"
+            "• Yandex Music"
         ),
         'settings_menu': (
             "Настройки\n\n"
@@ -61,7 +63,7 @@ LOCALES: Dict[str, Dict[str, str]] = {
             "Возможные причины:\n"
             "• Приватный аккаунт\n"
             "• Требуется авторизация\n"
-            "• Видео удалено\n"
+            "• Контент удален\n"
             "• Неверная ссылка"
         ),
         'auth_required': (
@@ -82,13 +84,18 @@ LOCALES: Dict[str, Dict[str, str]] = {
             "По вопросам оплаты обращайтесь к @binarybliss"
         ),
         'payment_success': "Спасибо за вашу поддержку!",
-        'group_welcome': "Привет! Используйте команду /zen с ссылкой для загрузки видео.\nНапример: /zen https://www.instagram.com/p/...",
+        'group_welcome': (
+            "Привет! Используйте команду /zen с ссылкой для загрузки видео или музыки.\n"
+            "Примеры:\n"
+            "• /zen https://www.instagram.com/p/...\n"
+            "• /zen https://music.yandex.ru/album/123/track/456"
+        ),
         'missing_url': "Пожалуйста, укажите ссылку после команды /zen",
         # Status messages
         'status_getting_info': "Получение информации... ({progress}%)",
-        'status_downloading': "Загрузка видео... ({progress}%)",
-        'status_processing': "Обработка видео... ({progress}%)",
-        'status_sending': "Отправка в Telegram... ({progress}%)",
+        'status_downloading': "Загрузка... ({progress}%)",
+        'status_processing': "Обработка... ({progress}%)",
+        'status_sending': "Отправка файла... ({progress}%)",
         'admin_only': "Только администраторы могут изменять настройки группы",
         'group_settings_menu': "Настройки группы\n\nЯзык: {language}\nКачество: {quality}",
         'settings_unchanged': "Настройки не изменились"
@@ -96,9 +103,10 @@ LOCALES: Dict[str, Dict[str, str]] = {
     'en': {
         'welcome': (
             "Zenload\n\n"
-            "Send video URL from:\n"
+            "Send video or music URL from:\n"
             "• Instagram\n"
-            "• TikTok\n\n"
+            "• TikTok\n"
+            "• Yandex Music\n\n"
             "Commands:\n"
             "/settings - Settings\n"
             "/help - Help\n"
@@ -128,7 +136,8 @@ LOCALES: Dict[str, Dict[str, str]] = {
             "Unsupported URL\n\n"
             "Supported:\n"
             "• Instagram\n"
-            "• TikTok"
+            "• TikTok\n"
+            "• Yandex Music"
         ),
         'settings_menu': (
             "Settings\n\n"
@@ -152,7 +161,7 @@ LOCALES: Dict[str, Dict[str, str]] = {
             "Possible reasons:\n"
             "• Private account\n"
             "• Authentication required\n"
-            "• Video deleted\n"
+            "• Content deleted\n"
             "• Invalid URL"
         ),
         'auth_required': (
@@ -173,13 +182,18 @@ LOCALES: Dict[str, Dict[str, str]] = {
             "For payment support, please contact @binarybliss"
         ),
         'payment_success': "Thank you for your support!",
-        'group_welcome': "Hi! Use the /zen command with a URL to download videos.\nExample: /zen https://www.instagram.com/p/...",
+        'group_welcome': (
+            "Hi! Use the /zen command with a URL to download videos or music.\n"
+            "Examples:\n"
+            "• /zen https://www.instagram.com/p/...\n"
+            "• /zen https://music.yandex.ru/album/123/track/456"
+        ),
         'missing_url': "Please provide a URL after the /zen command",
         # Status messages
         'status_getting_info': "Getting information... ({progress}%)",
-        'status_downloading': "Downloading video... ({progress}%)",
-        'status_processing': "Processing video... ({progress}%)",
-        'status_sending': "Sending to Telegram... ({progress}%)",
+        'status_downloading': "Downloading... ({progress}%)",
+        'status_processing': "Processing... ({progress}%)",
+        'status_sending': "Sending file... ({progress}%)",
         'admin_only': "Only administrators can modify group settings",
         'group_settings_menu': "Group Settings\n\nLanguage: {language}\nQuality: {quality}",
         'settings_unchanged': "Settings remain unchanged"
@@ -203,7 +217,3 @@ class Localization:
                 return text.format(**kwargs) if kwargs else text
             except (KeyError, ValueError):
                 return f"Missing translation: {key}"
-
-
-
-

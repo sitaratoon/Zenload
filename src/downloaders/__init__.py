@@ -2,6 +2,7 @@ from typing import Optional, Type, List
 from .base import BaseDownloader, DownloadError
 from .instagram import InstagramDownloader
 from .tiktok import TikTokDownloader
+from .yandex import YandexMusicDownloader
 # from .youtube import YouTubeDownloader  # Temporarily disabled
 
 
@@ -11,6 +12,7 @@ class DownloaderFactory:
     _downloaders: List[Type[BaseDownloader]] = [
         InstagramDownloader,
         TikTokDownloader,
+        YandexMusicDownloader,
         # YouTubeDownloader  # Temporarily disabled
     ]
 
@@ -25,4 +27,3 @@ class DownloaderFactory:
 
 
 __all__ = ['DownloaderFactory', 'DownloadError']
-

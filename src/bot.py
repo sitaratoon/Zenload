@@ -68,9 +68,15 @@ class ZenloadBot:
         # Payment handlers
         self.application.add_handler(PreCheckoutQueryHandler(self.payment_handlers.pre_checkout_callback))
         
-        # Message handlers (private chats only)
+        # Message handlers for private chats
         self.application.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            self.message_handlers.handle_message
+        ))
+        
+        # Message handlers for group chats (with bot mention)
+        self.application.add_handler(MessageHandler(
+            (filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS & filters.Entity("mention")),
             self.message_handlers.handle_message
         ))
         
@@ -81,6 +87,10 @@ class ZenloadBot:
         """Start the bot"""
         logger.info("Starting Zenload bot...")
         self.application.run_polling(drop_pending_updates=True)
+
+
+
+
 
 
 

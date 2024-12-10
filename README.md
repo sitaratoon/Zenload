@@ -13,7 +13,7 @@ High-performance Telegram bot for downloading videos from social media platforms
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/zenload.git
+git clone https://github.com/roninreilly/zenload.git
 cd zenload
 pip install -r requirements.txt
 ```

@@ -54,6 +54,14 @@ YTDLP_OPTIONS = {
         'no_warnings': True,
         'ignoreerrors': False,
         'quiet': True
+    },
+    'yandex_music': {
+        'format': 'bestaudio/best',
+        'nooverwrites': True,
+        'no_color': True,
+        'no_warnings': True,
+        'ignoreerrors': False,
+        'quiet': True
     }
 }
 
@@ -100,6 +108,7 @@ LOGGING_CONFIG = {
         }
     }
 }
+
 
 
 
