@@ -213,7 +213,7 @@ class DownloadManager:
         # Initialize as None, will create when needed
         self.connector = None
         self.session = None
-        self._initialized = False
+        self._loop = None
         
         # Active downloads tracking
         self.active_downloads: Dict[int, Dict[str, asyncio.Task]] = defaultdict(dict)
@@ -232,6 +232,7 @@ class DownloadManager:
     async def _create_queue(self):
         """Create a new queue bound to the current event loop"""
         try:
+            self._loop = asyncio.get_running_loop()
             if self.download_queue:
                 # Wait for existing queue to empty
                 try:
@@ -246,7 +247,7 @@ class DownloadManager:
 
     async def _ensure_initialized(self):
         """Ensure manager is initialized with event loop"""
-        if not self._initialized:
+        if not self._loop or self._loop != asyncio.get_running_loop():
             self.connector = aiohttp.TCPConnector(
                 limit=self.max_concurrent_downloads,
                 limit_per_host=20,  # Increased from 10 to 20
@@ -263,12 +264,11 @@ class DownloadManager:
                 }
             )
             
-            self._downloads_lock = asyncio.Lock()
+            self._loop = asyncio.get_running_loop()
+            self._downloads_lock = asyncio.Lock(loop=self._loop)
             await self._create_queue()
-            # Start queue processor
             self._queue_processor_running = True
-            self._queue_processor_task = asyncio.create_task(self._process_queue())
-            self._initialized = True
+            self._queue_processor_task = self._loop.create_task(self._process_queue())
 
     async def _process_queue(self):
         """Process the download queue"""
@@ -328,8 +328,8 @@ class DownloadManager:
 
     async def cleanup(self):
         """Cleanup resources on shutdown"""
-        if not self._initialized:
-            return
+        if not self._loop:
+            return            
             
         # Stop queue processor
         self._queue_processor_running = False
@@ -358,5 +358,6 @@ class DownloadManager:
         if self.session:
             await self.session.close()
             
-        self._initialized = False
+        self._loop = None
+
 
