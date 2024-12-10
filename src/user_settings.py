@@ -78,7 +78,7 @@ class UserSettingsManager:
                 ''')
                 
                 # Group settings table
-                cursor.execute('''
+                cursor.execute("""
                     CREATE TABLE IF NOT EXISTS group_settings (
                         group_id INTEGER PRIMARY KEY,
                         admin_id INTEGER NOT NULL,
@@ -88,10 +88,9 @@ class UserSettingsManager:
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (admin_id) REFERENCES user_settings(user_id)
                     )
-                
-                # Run migrations for new columns
+                """)
+
                 self._migrate_db(cursor)
-                ''')
                 conn.commit()
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
@@ -239,5 +238,7 @@ class UserSettingsManager:
         except Exception as e:
             logger.error(f"Failed to get admin for group {group_id}: {e}")
             return None
+
+
 
 
