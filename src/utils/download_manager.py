@@ -229,6 +229,21 @@ class DownloadManager:
             lambda: asyncio.Semaphore(10)  # Increased from 5 to 10
         )
 
+    async def _create_queue(self):
+        """Create a new queue bound to the current event loop"""
+        try:
+            if self.download_queue:
+                # Wait for existing queue to empty
+                try:
+                    await asyncio.wait_for(self.download_queue.join(), timeout=5.0)
+                except (asyncio.TimeoutError, Exception):
+                    pass
+            # Create new queue bound to current event loop
+            self.download_queue = asyncio.PriorityQueue()
+        except Exception as e:
+            logger.error(f"Error creating queue: {e}")
+            raise
+
     async def _ensure_initialized(self):
         """Ensure manager is initialized with event loop"""
         if not self._initialized:
@@ -249,8 +264,7 @@ class DownloadManager:
             )
             
             self._downloads_lock = asyncio.Lock()
-            self.download_queue = asyncio.PriorityQueue()
-            
+            await self._create_queue()
             # Start queue processor
             self._queue_processor_running = True
             self._queue_processor_task = asyncio.create_task(self._process_queue())
@@ -269,6 +283,13 @@ class DownloadManager:
                 break
             except Exception as e:
                 logger.error(f"Error processing download queue: {e}")
+                # Recreate queue if it's bound to wrong event loop
+                if "is bound to a different event loop" in str(e):
+                    try:
+                        await self._create_queue()
+                    except Exception as create_error:
+                        logger.error(f"Error recreating queue: {create_error}")
+                    continue
 
     async def process_download(self, downloader, url: str, update: Update, status_message: Message, format_id: str = None) -> None:
         """Process download request with optimized performance"""
@@ -322,7 +343,7 @@ class DownloadManager:
         # Wait for queue to empty
         if self.download_queue:
             try:
-                await self.download_queue.join()
+                await asyncio.wait_for(self.download_queue.join(), timeout=5.0)
             except Exception:
                 pass
         
@@ -338,3 +359,4 @@ class DownloadManager:
             await self.session.close()
             
         self._initialized = False
+

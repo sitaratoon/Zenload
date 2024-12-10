@@ -37,7 +37,15 @@ class InstagramDownloader(BaseDownloader):
             await asyncio.sleep(self.min_request_interval - time_since_last)
 
         self.last_request_time = asyncio.get_event_loop().time()
-        response = await asyncio.to_thread(requests.get, url, allow_redirects=True)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+        response = await asyncio.to_thread(requests.get, url, headers=headers, allow_redirects=False)
         
         if response.status_code == 429:
             # Exponential backoff
@@ -45,6 +53,17 @@ class InstagramDownloader(BaseDownloader):
             logger.warning(f"[Instagram] Rate limited, waiting {wait_time} seconds before retry")
             await asyncio.sleep(wait_time)
             return await self._make_request(url, retry_count + 1)
+
+        # Handle redirect manually to get proper final URL
+        if response.status_code in [301, 302, 303, 307, 308]:
+            redirect_url = response.headers['location']
+            # Handle relative URLs
+            if redirect_url.startswith('/'):
+                parsed = urlparse(url)
+                redirect_url = f"{parsed.scheme}://{parsed.netloc}{redirect_url}"
+            # Log the redirect chain
+            logger.info(f"[Instagram] Following redirect: {url} -> {redirect_url}")
+            return await self._make_request(redirect_url, retry_count)
         
         return response
 
@@ -64,8 +83,13 @@ class InstagramDownloader(BaseDownloader):
             'no_color': True,
             'no_warnings': True,
             'quiet': False,  # Show download progress
-            'extract_flat': False,
             'progress_hooks': [self._progress_hook],  # Add progress hook
+            'extractor_args': {
+                'instagram': {
+                    'api': ['https://i.instagram.com/api/v1'],
+                    'fatal_csrf': False
+                }
+            },
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': '*/*',
@@ -119,15 +143,22 @@ class InstagramDownloader(BaseDownloader):
             download_dir = Path(__file__).parent.parent.parent / "downloads"
             download_dir.mkdir(exist_ok=True)
             
-            # Configure yt-dlp options with output template
             ydl_opts = self._get_ydl_opts()
             ydl_opts.update({
                 'outtmpl': str(download_dir / '%(id)s.%(ext)s'),
             })
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                self.update_progress('status_getting_info', 50)
-                info = await asyncio.to_thread(
-                    ydl.extract_info, resolved_url, download=False
+                # Extract media ID from URL
+                media_id = re.search(r'/reel/([^/?]+)', resolved_url).group(1)
+                # Try direct API endpoint first
+                api_url = f'https://i.instagram.com/api/v1/media/{media_id}/info/'
+                
+                # Add custom extractor args for this URL
+                ydl_opts['extractor_args']['instagram'].update({
+                    'media_id': [media_id]
+                })
+                info = await asyncio.to_thread(ydl.extract_info,
+                    api_url, download=False
                 )
                 self.update_progress('status_getting_info', 70)
                 
@@ -188,7 +219,8 @@ class InstagramDownloader(BaseDownloader):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 self.update_progress('status_downloading', 20)
                 info = await asyncio.to_thread(
-                    ydl.extract_info, resolved_url, download=True
+                    # Pass the resolved URL directly to yt-dlp
+                    ydl.extract_info, str(resolved_url), download=True
                 )
                 
                 if not info:
@@ -254,3 +286,8 @@ class InstagramDownloader(BaseDownloader):
                     self.update_progress('status_downloading', progress)
             except Exception as e:
                 logger.error(f"Error in progress hook: {e}")
+
+
+
+
+
