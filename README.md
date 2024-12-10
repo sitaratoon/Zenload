@@ -27,21 +27,30 @@ YANDEX_MUSIC_TOKEN=your_yandex_token  # Optional
 ```
 4. Run `run.bat` to start the bot
 
-### Linux 
+### Linux (VPS)
 
-1. Download and run `deploy.sh`:
+1. Download the deployment script:
 ```bash
 wget https://raw.githubusercontent.com/RoninReilly/Zenload/main/deploy.sh
 chmod +x deploy.sh
+```
+
+2. Run the script:
+```bash
 ./deploy.sh
 ```
-2. The script will:
-   - Clone the repository
-   - Set up Python environment
-   - Install dependencies
-   - Create systemd service
-   - Prompt for your tokens
-3. The bot will start automatically and run as a system service
+
+The script will:
+- Install required packages (python3, python3-venv, git)
+- Create installation directory (/opt/zenload)
+- Clone the repository
+- Set up Python environment
+- Install dependencies
+- Create systemd service
+- Prompt for your tokens
+- Start the bot automatically
+
+The bot will be installed in `/opt/zenload` with proper permissions and systemd service configuration.
 
 Optional: Add cookies/instagram.txt for enhanced Instagram functionality
 
