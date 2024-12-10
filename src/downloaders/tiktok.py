@@ -139,68 +139,70 @@ class TikTokDownloader(BaseDownloader):
     async def download(self, url: str, format_id: Optional[str] = None) -> Tuple[str, Path]:
         """Download video from URL"""
         try:
-            self.update_progress('status_downloading', 0)
+            self.update_progress('status_downloading', 10)
             processed_url = self.preprocess_url(url)
-            logger.info(f"Starting download for URL: {processed_url}")
+            logger.info(f"[TikTok] Downloading from: {processed_url}")
 
             # Create download directory if not exists
             download_dir = Path(__file__).parent.parent.parent / "downloads"
             download_dir.mkdir(exist_ok=True)
             download_dir = download_dir.resolve()
-            logger.info(f"Download directory: {download_dir}")
-
+            logger.info(f"[TikTok] Download directory: {download_dir}")
+            
             # Configure yt-dlp options
             ydl_opts = self._get_ydl_opts(format_id)
             temp_filename = f"temp_{self.platform_id()}_{os.urandom(4).hex()}"
             ydl_opts['outtmpl'] = str(download_dir / f"{temp_filename}.%(ext)s")
+            
+            self.update_progress('status_downloading', 20)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = await asyncio.to_thread(
+                    ydl.extract_info, processed_url, True
+                )
+                
+                if not info:
+                    raise DownloadError("Failed to get content information")
 
-            self.update_progress('status_downloading', 10)
-            logger.info(f"Using yt-dlp options: {ydl_opts}")
+                # Find downloaded file
+                downloaded_file = None
+                for file in download_dir.glob(f"{temp_filename}.*"):
+                    if file.is_file():
+                        downloaded_file = file
+                        break
 
-            def download_content():
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    return ydl.extract_info(processed_url, download=True)
+                if not downloaded_file:
+                    raise DownloadError("File was downloaded but not found in the system")
+                
+                logger.info(f"[TikTok] Downloaded to: {downloaded_file}")
+                
+                # Format numbers to K/M
+                def format_number(num):
+                    if not num:
+                        return "0"
+                    if num >= 1000000:
+                        return f"{num/1000000:.1f}M"
+                    if num >= 1000:
+                        return f"{num/1000:.1f}K"
+                    return str(num)
 
-            try:
-                self.update_progress('status_downloading', 20)
-                info = await asyncio.to_thread(download_content)
-            except Exception as e:
-                error_msg = str(e).lower()
-                if 'login' in error_msg or 'cookie' in error_msg:
-                    raise DownloadError("Authentication required. Content may be private.")
-                elif 'not found' in error_msg or '404' in error_msg:
-                    raise DownloadError("Content not found. It may have been deleted or is unavailable.")
+                likes = format_number(info.get('like_count', 0))
+                username = info.get('uploader', '').replace('https://www.tiktok.com/@', '').strip()
+                
+                if info.get('view_count'):
+                    views = format_number(info.get('view_count'))
+                    metadata = f"TikTok | {views} | {likes}\nby <a href=\"{processed_url}\">{username}</a>"
                 else:
-                    logger.error(f"Download error for {url}: {str(e)}", exc_info=True)
-                    raise DownloadError(f"Download error: {str(e)}")
+                    metadata = f"TikTok | {likes}\nby <a href=\"{processed_url}\">{username}</a>"
 
-            if not info:
-                raise DownloadError("Failed to get content information")
-
-            # Find downloaded file
-            downloaded_file = None
-            for file in download_dir.glob(f"{temp_filename}.*"):
-                if file.is_file():
-                    downloaded_file = file
-                    break
-
-            if not downloaded_file:
-                raise DownloadError("File was downloaded but not found in the system")
-
-            logger.info(f"Downloaded to: {downloaded_file}")
-
-            # Generate clean metadata
-            metadata = info.get('title', 'Untitled')
-            if info.get('view_count'):
-                metadata += f"\nViews: {info['view_count']:,}"
-            if info.get('like_count'):
-                metadata += f"\nLikes: {info['like_count']:,}"
-
-            self.update_progress('status_downloading', 100)
-            return metadata, downloaded_file
-
-        except DownloadError:
-            raise
+                self.update_progress('status_downloading', 100)
+                return metadata, downloaded_file
+                
         except Exception as e:
-            logger.error(f"Unexpected error downloading {url}: {str(e)}", exc_info=True)
-            raise DownloadError(f"Download error: {str(e)}")
+            error_msg = str(e)
+            if "Private video" in error_msg:
+                raise DownloadError("This is a private video")
+            elif "Login required" in error_msg:
+                raise DownloadError("Authentication required")
+            else:
+                logger.error(f"[TikTok] Download failed: {error_msg}")
+                raise DownloadError(f"Download error: {error_msg}")

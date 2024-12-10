@@ -11,7 +11,11 @@ DOWNLOADS_DIR.mkdir(exist_ok=True)
 COOKIES_DIR.mkdir(exist_ok=True)
 
 # Bot Configuration
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", None)
+if TOKEN is None:
+    raise ValueError(
+        "TELEGRAM_BOT_TOKEN environment variable is not set. Please set it in your .env file."
+    )
 
 # Platform specific configurations
 YTDLP_OPTIONS = {
@@ -96,6 +100,7 @@ LOGGING_CONFIG = {
         }
     }
 }
+
 
 
 

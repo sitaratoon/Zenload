@@ -161,13 +161,26 @@ class InstagramDownloader(BaseDownloader):
                 
                 logger.info(f"[Instagram] Downloaded to: {file_path}")
                 
-                # Generate clean metadata
-                metadata = info.get('title', 'Без названия')
+                # Format numbers to K/M
+                def format_number(num):
+                    if not num:
+                        return "0"
+                    if num >= 1000000:
+                        return f"{num/1000000:.1f}M"
+                    if num >= 1000:
+                        return f"{num/1000:.1f}K"
+                    return str(num)
+
+                likes = format_number(info.get('like_count', 0))
+                username = info.get('uploader', '').replace('https://www.instagram.com/', '').strip()
+
+                # Instagram часто не отдает просмотры, поэтому показываем их только если они есть
                 if info.get('view_count'):
-                    metadata += f"\nПросмотры: {info['view_count']:,}"
-                if info.get('like_count'):
-                    metadata += f"\nЛайки: {info['like_count']:,}"
-                
+                    views = format_number(info.get('view_count'))
+                    metadata = f"Instagram | {views} | {likes}\nby <a href=\"{resolved_url}\">{username}</a>"
+                else:
+                    metadata = f"Instagram | {likes}\nby <a href=\"{resolved_url}\">{username}</a>"
+
                 self.update_progress('status_downloading', 100)
                 return metadata, file_path
                 
@@ -193,4 +206,8 @@ class InstagramDownloader(BaseDownloader):
                     self.update_progress('status_downloading', progress)
             except Exception as e:
                 logger.error(f"Error in progress hook: {e}")
+
+
+
+
 

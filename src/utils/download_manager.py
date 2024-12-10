@@ -50,7 +50,7 @@ class DownloadManager:
         """Process status updates in a separate thread"""
         while True:
             try:
-                status, progress = self._update_queue.get(timeout=0.5)
+                status, progress = self._update_queue.get(timeout=0.1)  # Shorter timeout for more frequent checks
                 if status == "STOP":
                     break
 
@@ -63,8 +63,20 @@ class DownloadManager:
                             progress
                         ),
                         self._loop
-                    ).add_done_callback(lambda f: f.result())
-                    future.result(timeout=5)  # Increased timeout
+                    )
+                    try:
+                        future.result(timeout=3)  # Shorter timeout
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Status update timed out: {status} {progress}%")
+                        # Clear queue on timeout
+                        while not self._update_queue.empty():
+                            try:
+                                self._update_queue.get_nowait()
+                            except:
+                                pass
+                    except Exception as e:
+                        logger.warning(f"Status update failed: {e}")
+
             except queue.Empty:
                 continue
             except Exception as e:
@@ -122,6 +134,7 @@ class DownloadManager:
                 await update.effective_message.reply_video(
                     video=video_file,
                     caption=metadata,
+                    parse_mode='HTML',
                     supports_streaming=True,
                     read_timeout=60,
                     write_timeout=60,
@@ -147,6 +160,12 @@ class DownloadManager:
         finally:
             # Stop update processing thread
             if self._update_thread and self._update_thread.is_alive():
+                # Clear any pending updates
+                while not self._update_queue.empty():
+                    try:
+                        self._update_queue.get_nowait()
+                    except:
+                        pass
                 self._update_queue.put(("STOP", 0))
                 self._update_thread.join(timeout=1)
 
@@ -171,5 +190,9 @@ class DownloadManager:
                 logger.info("Status message deleted")
             except Exception as e:
                 logger.error(f"Error deleting status message: {e}")
+
+
+
+
 
 
