@@ -2,6 +2,7 @@ import logging
 import logging.config
 from pathlib import Path
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, PreCheckoutQueryHandler, filters
+import signal
 
 from .config import TOKEN, LOGGING_CONFIG, BASE_DIR
 from .user_settings import UserSettingsManager
@@ -83,10 +84,30 @@ class ZenloadBot:
         # Callback query handler
         self.application.add_handler(CallbackQueryHandler(self.callback_handlers.handle_callback))
 
+    async def _cleanup(self):
+        """Cleanup resources before shutdown"""
+        logger.info("Cleaning up resources...")
+        try:
+            await self.download_manager.cleanup()
+            logger.info("Resources cleaned up successfully")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals"""
+        logger.info(f"Received signal {signum}")
+        asyncio.run(self._cleanup())
+
     def run(self):
         """Start the bot"""
         logger.info("Starting Zenload bot...")
+        
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        
         self.application.run_polling(drop_pending_updates=True)
+
 
 
 

@@ -98,7 +98,13 @@ LOCALES: Dict[str, Dict[str, str]] = {
         'status_sending': "Отправка файла... ({progress}%)",
         'admin_only': "Только администраторы могут изменять настройки группы",
         'group_settings_menu': "Настройки группы\n\nЯзык: {language}\nКачество: {quality}",
-        'settings_unchanged': "Настройки не изменились"
+        'settings_unchanged': "Настройки не изменились",
+        # Rate limit and concurrent download messages
+        'error_too_many_downloads': (
+            "Слишком много одновременных загрузок.\n"
+            "Пожалуйста, подождите завершения текущих загрузок или попробуйте позже."
+        ),
+        'error_rate_limit': "Слишком много запросов. Пожалуйста, подождите несколько секунд."
     },
     'en': {
         'welcome': (
@@ -196,7 +202,13 @@ LOCALES: Dict[str, Dict[str, str]] = {
         'status_sending': "Sending file... ({progress}%)",
         'admin_only': "Only administrators can modify group settings",
         'group_settings_menu': "Group Settings\n\nLanguage: {language}\nQuality: {quality}",
-        'settings_unchanged': "Settings remain unchanged"
+        'settings_unchanged': "Settings remain unchanged",
+        # Rate limit and concurrent download messages
+        'error_too_many_downloads': (
+            "Too many concurrent downloads.\n"
+            "Please wait for current downloads to complete or try again later."
+        ),
+        'error_rate_limit': "Too many requests. Please wait a few seconds."
     }
 }
 
@@ -217,3 +229,4 @@ class Localization:
                 return text.format(**kwargs) if kwargs else text
             except (KeyError, ValueError):
                 return f"Missing translation: {key}"
+
