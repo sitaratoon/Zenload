@@ -4,6 +4,7 @@ import json
 import asyncio
 import logging
 from pathlib import Path
+from time import sleep
 from typing import Optional, Tuple, List, Dict, Any
 import requests
 import yt_dlp
@@ -12,10 +13,40 @@ from .base import BaseDownloader, DownloadError
 
 logger = logging.getLogger(__name__)
 
+class RateLimitError(DownloadError):
+    """Custom exception for rate limit errors"""
+    pass
+
 class InstagramDownloader(BaseDownloader):
     def __init__(self):
         super().__init__()
         self.cookie_file = Path(__file__).parent.parent.parent / "cookies" / "instagram.txt"
+        self.last_request_time = 0
+        self.min_request_interval = 2  # Minimum seconds between requests
+        self.max_retries = 3
+
+    async def _make_request(self, url: str, retry_count: int = 0) -> requests.Response:
+        """Make a rate-limited request with retry logic"""
+        if retry_count >= self.max_retries:
+            raise RateLimitError("Превышен лимит запросов к Instagram. Пожалуйста, подождите несколько минут и попробуйте снова.")
+
+        # Implement rate limiting
+        current_time = asyncio.get_event_loop().time()
+        time_since_last = current_time - self.last_request_time
+        if time_since_last < self.min_request_interval:
+            await asyncio.sleep(self.min_request_interval - time_since_last)
+
+        self.last_request_time = asyncio.get_event_loop().time()
+        response = await asyncio.to_thread(requests.get, url, allow_redirects=True)
+        
+        if response.status_code == 429:
+            # Exponential backoff
+            wait_time = (2 ** retry_count) * 5  # 5, 10, 20 seconds
+            logger.warning(f"[Instagram] Rate limited, waiting {wait_time} seconds before retry")
+            await asyncio.sleep(wait_time)
+            return await self._make_request(url, retry_count + 1)
+        
+        return response
 
     def platform_id(self) -> str:
         """Return platform identifier"""
@@ -41,6 +72,8 @@ class InstagramDownloader(BaseDownloader):
                 'X-IG-App-ID': '936619743392459'
             }
         }
+        if self.cookie_file.exists():
+            opts['cookiefile'] = str(self.cookie_file)
         return opts
 
     async def _resolve_share_url(self, url: str) -> str:
@@ -51,7 +84,7 @@ class InstagramDownloader(BaseDownloader):
         logger.info(f"[Instagram] Processing share URL: {url}")
         try:
             self.update_progress('status_getting_info', 10)
-            response = await asyncio.to_thread(requests.get, url, allow_redirects=True)
+            response = await self._make_request(url)
             if response.status_code != 200:
                 raise DownloadError(f"Ошибка HTTP {response.status_code}")
             
@@ -64,8 +97,13 @@ class InstagramDownloader(BaseDownloader):
             self.update_progress('status_getting_info', 20)
             return final_url
 
+        except RateLimitError as e:
+            logger.error(f"[Instagram] Rate limit error: {e}")
+            raise
         except Exception as e:
             logger.error(f"[Instagram] Share URL resolution failed: {e}")
+            if "429" in str(e):
+                raise DownloadError("Превышен лимит запросов к Instagram. Пожалуйста, подождите несколько минут и попробуйте снова.")
             raise DownloadError(f"Ошибка при обработке share-ссылки: {str(e)}")
 
     async def get_formats(self, url: str) -> List[Dict]:
@@ -89,12 +127,12 @@ class InstagramDownloader(BaseDownloader):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 self.update_progress('status_getting_info', 50)
                 info = await asyncio.to_thread(
-                    ydl.extract_info, resolved_url, True
+                    ydl.extract_info, resolved_url, download=False
                 )
                 self.update_progress('status_getting_info', 70)
                 
                 if not info:
-                    raise DownloadError("Не удалось получить информацию о видео")
+                    raise DownloadError("Не удалось получить информацию о медиафайле")
 
                 formats = []
                 if 'formats' in info:
@@ -116,8 +154,13 @@ class InstagramDownloader(BaseDownloader):
                 logger.info(f"[Instagram] Available formats: {formats}")
                 return sorted(formats, key=lambda x: int(x['quality'][:-1]), reverse=True)
                 
+        except RateLimitError as e:
+            logger.error(f"[Instagram] Rate limit error: {e}")
+            raise
         except Exception as e:
             logger.error(f"[Instagram] Format extraction failed: {e}")
+            if "429" in str(e):
+                raise DownloadError("Превышен лимит запросов к Instagram. Пожалуйста, подождите несколько минут и попробуйте снова.")
             raise DownloadError(f"Ошибка при получении форматов: {str(e)}")
 
     async def download(self, url: str, format_id: Optional[str] = None) -> Tuple[str, Path]:
@@ -145,11 +188,11 @@ class InstagramDownloader(BaseDownloader):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 self.update_progress('status_downloading', 20)
                 info = await asyncio.to_thread(
-                    ydl.extract_info, resolved_url, True  # Changed to True to force download
+                    ydl.extract_info, resolved_url, download=True
                 )
                 
                 if not info:
-                    raise DownloadError("Не удалось загрузить видео")
+                    raise DownloadError("Не удалось загрузить медиафайл")
 
                 # Get downloaded file path and verify it exists
                 filename = ydl.prepare_filename(info)
@@ -184,12 +227,17 @@ class InstagramDownloader(BaseDownloader):
                 self.update_progress('status_downloading', 100)
                 return metadata, file_path
                 
+        except RateLimitError as e:
+            logger.error(f"[Instagram] Rate limit error: {e}")
+            raise
         except Exception as e:
             error_msg = str(e)
-            if "Private video" in error_msg:
-                raise DownloadError("Это приватное видео")
-            elif "Login required" in error_msg:
+            if "Private video" in error_msg or "Private profile" in error_msg:
+                raise DownloadError("Это приватный контент")
+            elif "Login required" in error_msg or "Cookie" in error_msg:
                 raise DownloadError("Требуется авторизация")
+            elif "429" in error_msg:
+                raise DownloadError("Превышен лимит запросов к Instagram. Пожалуйста, подождите несколько минут и попробуйте снова.")
             else:
                 logger.error(f"[Instagram] Download failed: {error_msg}")
                 raise DownloadError(f"Ошибка загрузки: {error_msg}")
@@ -206,8 +254,3 @@ class InstagramDownloader(BaseDownloader):
                     self.update_progress('status_downloading', progress)
             except Exception as e:
                 logger.error(f"Error in progress hook: {e}")
-
-
-
-
-
