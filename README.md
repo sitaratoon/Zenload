@@ -5,7 +5,7 @@ High-performance Telegram bot for downloading videos from social media platforms
 ## Features
 
 - Fast and efficient video downloads
-- Support for Instagram, TikTok, YouTube
+- Support for Instagram, TikTok, Pinterest, YouTube
 - Automatic format optimization
 - Clean and intuitive interface
 - Robust error handling
@@ -88,6 +88,7 @@ zenload/
 
 - Instagram (Reels, Posts)
 - TikTok
+- Pinterest
 - YouTube
 - Yandex Music
 

@@ -8,6 +8,7 @@ LOCALES: Dict[str, Dict[str, str]] = {
             "Отправьте ссылку на видео или музыку с:\n"
             "• Instagram\n"
             "• TikTok\n"
+            "• Pinterest\n"
             "• Yandex Music\n\n"
             "Команды:\n"
             "/settings - Настройки\n"
@@ -39,6 +40,7 @@ LOCALES: Dict[str, Dict[str, str]] = {
             "Поддерживаются:\n"
             "• Instagram\n"
             "• TikTok\n"
+            "• Pinterest\n"
             "• Yandex Music"
         ),
         'settings_menu': (
@@ -112,6 +114,7 @@ LOCALES: Dict[str, Dict[str, str]] = {
             "Send video or music URL from:\n"
             "• Instagram\n"
             "• TikTok\n"
+            "• Pinterest\n"
             "• Yandex Music\n\n"
             "Commands:\n"
             "/settings - Settings\n"
@@ -143,6 +146,7 @@ LOCALES: Dict[str, Dict[str, str]] = {
             "Supported:\n"
             "• Instagram\n"
             "• TikTok\n"
+            "• Pinterest\n"
             "• Yandex Music"
         ),
         'settings_menu': (
@@ -229,4 +233,3 @@ class Localization:
                 return text.format(**kwargs) if kwargs else text
             except (KeyError, ValueError):
                 return f"Missing translation: {key}"
-

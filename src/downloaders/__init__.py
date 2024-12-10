@@ -3,6 +3,7 @@ from .base import BaseDownloader, DownloadError
 from .instagram import InstagramDownloader
 from .tiktok import TikTokDownloader
 from .yandex import YandexMusicDownloader
+from .pinterest import PinterestDownloader
 # from .youtube import YouTubeDownloader  # Temporarily disabled
 
 
@@ -13,6 +14,7 @@ class DownloaderFactory:
         InstagramDownloader,
         TikTokDownloader,
         YandexMusicDownloader,
+        PinterestDownloader,
         # YouTubeDownloader  # Temporarily disabled
     ]
 
