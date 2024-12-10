@@ -36,6 +36,17 @@ class CommandHandlers:
         chat_id = update.effective_chat.id
         chat_type = update.effective_chat.type
         is_admin = await self._is_admin(update, context)
+
+        # Save or update user information
+        user = update.effective_user
+        self.settings_manager.update_settings(
+            user_id=user_id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            is_premium=user.is_premium if hasattr(user, 'is_premium') else False
+        )
+        # Note: phone_number is not available through normal bot API, requires special permissions
         
         if chat_type in ['group', 'supergroup']:
             if is_admin:
@@ -169,3 +180,4 @@ class CommandHandlers:
         
         # Process URL using message handler
         await message_handler._process_url(url, update, context)
+

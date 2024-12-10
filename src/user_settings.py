@@ -10,6 +10,11 @@ logger = logging.getLogger(__name__)
 class UserSettings:
     user_id: int
     language: str = 'ru'  # Default to Russian
+    username: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    is_premium: bool = False
     default_quality: str = 'ask'  # 'ask' or 'best'
 
 @dataclass
@@ -25,6 +30,32 @@ class UserSettingsManager:
         self.db_path = db_path
         self._init_db()
 
+    def _migrate_db(self, cursor):
+        """Safely add new columns if they don't exist"""
+        try:
+            # Get current columns
+            cursor.execute('PRAGMA table_info(user_settings)')
+            existing_columns = {col[1] for col in cursor.fetchall()}
+            
+            # Define new columns to add
+            new_columns = {
+                'username': 'TEXT',
+                'first_name': 'TEXT',
+                'last_name': 'TEXT',
+                'phone_number': 'TEXT',
+                'is_premium': 'BOOLEAN NOT NULL DEFAULT 0'
+            }
+            
+            # Add missing columns
+            for column_name, column_type in new_columns.items():
+                if column_name not in existing_columns:
+                    cursor.execute(f'ALTER TABLE user_settings ADD COLUMN {column_name} {column_type}')
+                    logger.info(f"Added new column: {column_name}")
+            
+        except Exception as e:
+            logger.error(f"Failed to migrate database: {e}")
+            raise
+
     def _init_db(self):
         """Initialize SQLite database and create tables if needed"""
         try:
@@ -35,7 +66,12 @@ class UserSettingsManager:
                     CREATE TABLE IF NOT EXISTS user_settings (
                         user_id INTEGER PRIMARY KEY,
                         language TEXT NOT NULL DEFAULT 'ru',
+                        username TEXT,
+                        first_name TEXT,
+                        last_name TEXT,
+                        phone_number TEXT,
                         default_quality TEXT NOT NULL DEFAULT 'ask',
+                        is_premium BOOLEAN NOT NULL DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
@@ -52,6 +88,9 @@ class UserSettingsManager:
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (admin_id) REFERENCES user_settings(user_id)
                     )
+                
+                # Run migrations for new columns
+                self._migrate_db(cursor)
                 ''')
                 conn.commit()
         except Exception as e:
@@ -85,7 +124,7 @@ class UserSettingsManager:
                 
                 # Get or create user settings
                 cursor.execute(
-                    "SELECT language, default_quality FROM user_settings WHERE user_id = ?",
+                    "SELECT language, default_quality, username, first_name, last_name, phone_number, is_premium FROM user_settings WHERE user_id = ?",
                     (user_id,)
                 )
                 result = cursor.fetchone()
@@ -94,15 +133,20 @@ class UserSettingsManager:
                     # Create default settings
                     settings = UserSettings(user_id=user_id)
                     cursor.execute(
-                        "INSERT INTO user_settings (user_id, language, default_quality) VALUES (?, ?, ?)",
-                        (user_id, settings.language, settings.default_quality)
+                        "INSERT INTO user_settings (user_id, language, default_quality, username, first_name, last_name, phone_number, is_premium) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (user_id, settings.language, settings.default_quality, None, None, None, None, False)
                     )
                     conn.commit()
                 else:
                     settings = UserSettings(
                         user_id=user_id,
                         language=result[0],
-                        default_quality=result[1]
+                        default_quality=result[1],
+                        username=result[2],
+                        first_name=result[3],
+                        last_name=result[4],
+                        phone_number=result[5],
+                        is_premium=bool(result[6])
                     )
 
                 return settings
@@ -153,7 +197,7 @@ class UserSettingsManager:
                         return self.get_settings(user_id, chat_id, is_admin)
                 
                 # Update user settings
-                valid_fields = {'language', 'default_quality'}
+                valid_fields = {'language', 'default_quality', 'username', 'first_name', 'last_name', 'phone_number', 'is_premium'}
                 update_fields = {k: v for k, v in kwargs.items() if k in valid_fields}
                 
                 if not update_fields:
@@ -170,8 +214,8 @@ class UserSettingsManager:
                     # If no row was updated, insert new settings
                     settings = UserSettings(user_id=user_id, **kwargs)
                     cursor.execute(
-                        "INSERT INTO user_settings (user_id, language, default_quality) VALUES (?, ?, ?)",
-                        (user_id, settings.language, settings.default_quality)
+                        "INSERT INTO user_settings (user_id, language, default_quality, username, first_name, last_name, phone_number, is_premium) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (user_id, settings.language, settings.default_quality, settings.username, settings.first_name, settings.last_name, settings.phone_number, settings.is_premium)
                     )
                 
                 conn.commit()
@@ -195,3 +239,5 @@ class UserSettingsManager:
         except Exception as e:
             logger.error(f"Failed to get admin for group {group_id}: {e}")
             return None
+
+

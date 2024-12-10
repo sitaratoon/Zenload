@@ -1,4 +1,17 @@
 # Zenload
+# Database Migrations
+
+The bot now includes automatic database migrations. When updating to a new version:
+
+1. Pull the latest code from GitHub
+2. Restart the bot
+
+The UserSettingsManager will automatically:
+- Check for missing columns in the database
+- Add any new columns safely without affecting existing data
+- Log any migration activities
+
+No manual migration steps are required. The bot will handle all database updates automatically on startup.
 
 High-performance Telegram bot for downloading videos from social media platforms.
 
@@ -103,4 +116,5 @@ zenload/
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
 

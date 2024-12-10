@@ -33,6 +33,16 @@ class MessageHandlers:
         """Handle incoming messages with URLs"""
         message = update.message
         user_id = update.effective_user.id
+        
+        # Update user information with each message
+        user = update.effective_user
+        self.settings_manager.update_settings(
+            user_id=user_id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            is_premium=user.is_premium if hasattr(user, 'is_premium') else False
+        )
 
         message_text = message.text or ''
 
@@ -203,3 +213,4 @@ class MessageHandlers:
                 )
             logger.error(f"Unexpected error processing {url}: {e}")
             await status_message.delete()
+
