@@ -265,7 +265,7 @@ class DownloadManager:
             )
             
             self._loop = asyncio.get_running_loop()
-            self._downloads_lock = asyncio.Lock(loop=self._loop)
+            self._downloads_lock = asyncio.Lock()
             await self._create_queue()
             self._queue_processor_running = True
             self._queue_processor_task = self._loop.create_task(self._process_queue())
@@ -359,5 +359,6 @@ class DownloadManager:
             await self.session.close()
             
         self._loop = None
+
 
 
