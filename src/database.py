@@ -3,10 +3,7 @@ from datetime import datetime
 from pymongo import MongoClient
 from pymongo.database import Database
 import os
-from pathlib import Path
-import sqlite3
 import logging
-from .config import BASE_DIR
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -164,65 +161,3 @@ class UserSettingsManager:
         except Exception as e:
             logger.error(f"Failed to get admin for group {group_id}: {e}")
             return None
-
-def migrate_from_sqlite():
-    """Migrate data from SQLite to MongoDB if zenload.db exists"""
-    db_path = BASE_DIR / "zenload.db"
-    if not db_path.exists():
-        return
-    
-    try:
-        # Connect to SQLite
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            
-            # Migrate user settings
-            cursor.execute("SELECT * FROM user_settings")
-            users = cursor.fetchall()
-            
-            for user in users:
-                user_doc = {
-                    "user_id": user[0],
-                    "language": user[1],
-                    "username": user[2],
-                    "first_name": user[3],
-                    "last_name": user[4],
-                    "phone_number": user[5],
-                    "default_quality": user[6],
-                    "is_premium": bool(user[7]),
-                    "created_at": datetime.strptime(user[8], '%Y-%m-%d %H:%M:%S') if user[8] else datetime.utcnow(),
-                    "updated_at": datetime.strptime(user[9], '%Y-%m-%d %H:%M:%S') if user[9] else datetime.utcnow()
-                }
-                
-                db.user_settings.update_one(
-                    {"user_id": user_doc["user_id"]},
-                    {"$set": user_doc},
-                    upsert=True
-                )
-            
-            # Migrate group settings
-            cursor.execute("SELECT * FROM group_settings")
-            groups = cursor.fetchall()
-            
-            for group in groups:
-                group_doc = {
-                    "group_id": group[0],
-                    "admin_id": group[1],
-                    "language": group[2],
-                    "default_quality": group[3],
-                    "created_at": datetime.strptime(group[4], '%Y-%m-%d %H:%M:%S') if group[4] else datetime.utcnow(),
-                    "updated_at": datetime.strptime(group[5], '%Y-%m-%d %H:%M:%S') if group[5] else datetime.utcnow()
-                }
-                
-                db.group_settings.update_one(
-                    {"group_id": group_doc["group_id"]},
-                    {"$set": group_doc},
-                    upsert=True
-                )
-        
-        logger.info("Successfully migrated data from SQLite to MongoDB")
-        
-    except Exception as e:
-        logger.error(f"Failed to migrate data: {e}")
-        raise
-

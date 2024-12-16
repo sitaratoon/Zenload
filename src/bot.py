@@ -7,7 +7,7 @@ import asyncio
 import sys
 
 from .config import TOKEN, LOGGING_CONFIG, BASE_DIR
-from .models import UserSettingsManager
+from .database import UserSettingsManager
 from .locales import Localization
 from .utils import KeyboardBuilder, DownloadManager
 from .handlers import CommandHandlers, MessageHandlers, CallbackHandlers, PaymentHandlers
@@ -142,4 +142,5 @@ class ZenloadBot:
             if not self._stopping:
                 loop = asyncio.get_event_loop()
                 loop.run_until_complete(self.stop())
+
 
