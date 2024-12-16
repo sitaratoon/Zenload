@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 import logging
+from .config import BASE_DIR
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -166,7 +167,7 @@ class UserSettingsManager:
 
 def migrate_from_sqlite():
     """Migrate data from SQLite to MongoDB if zenload.db exists"""
-    db_path = Path("zenload.db")
+    db_path = BASE_DIR / "zenload.db"
     if not db_path.exists():
         return
     
@@ -224,3 +225,4 @@ def migrate_from_sqlite():
     except Exception as e:
         logger.error(f"Failed to migrate data: {e}")
         raise
+
