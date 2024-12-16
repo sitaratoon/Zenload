@@ -7,7 +7,7 @@ import asyncio
 import sys
 
 from .config import TOKEN, LOGGING_CONFIG, BASE_DIR
-from .user_settings import UserSettingsManager
+from .models import UserSettingsManager
 from .locales import Localization
 from .utils import KeyboardBuilder, DownloadManager
 from .handlers import CommandHandlers, MessageHandlers, CallbackHandlers, PaymentHandlers
@@ -20,7 +20,7 @@ class ZenloadBot:
     def __init__(self):
         # Initialize core components
         self.application = Application.builder().token(TOKEN).build()
-        self.settings_manager = UserSettingsManager(BASE_DIR / "zenload.db")
+        self.settings_manager = UserSettingsManager()
         self.localization = Localization()
         
         # Initialize utility classes
@@ -142,3 +142,4 @@ class ZenloadBot:
             if not self._stopping:
                 loop = asyncio.get_event_loop()
                 loop.run_until_complete(self.stop())
+

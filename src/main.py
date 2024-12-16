@@ -29,6 +29,10 @@ def main():
         # Set up exception handler
         loop.set_exception_handler(handle_exception)
         
+        # Migrate data from SQLite if needed
+        from .models import migrate_from_sqlite
+        migrate_from_sqlite()
+        
         # Initialize bot
         bot = ZenloadBot()
         
@@ -62,3 +66,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
