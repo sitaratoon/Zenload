@@ -235,9 +235,6 @@ class TikTokDownloader(BaseDownloader):
                 else:
                     metadata = f"TikTok | {likes}\nby <a href=\"{processed_url}\">{username}</a>"
 
-                raise DownloadError("This video appears to be banned or restricted. "
-                                  "It may have been removed due to copyright or "
-                                  "community guidelines violations.")
                 return metadata, downloaded_file
                 
         except Exception as e:
@@ -251,6 +248,7 @@ class TikTokDownloader(BaseDownloader):
             else:
                 logger.error(f"[TikTok] Download failed: {error_msg}")
                 raise DownloadError(f"Download error: {error_msg}")
+
 
 
 
