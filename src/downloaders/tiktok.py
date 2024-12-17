@@ -4,6 +4,7 @@ import logging
 import asyncio
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
+from time import sleep
 from urllib.parse import urlparse
 import yt_dlp
 from .base import BaseDownloader, DownloadError
@@ -31,12 +32,20 @@ class TikTokDownloader(BaseDownloader):
             'progress_hooks': [self._progress_hook],  # Add progress hook
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate', 
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
             },
             'extractor_args': {
                 'TikTok': {
-                    'api_hostname': 'api16-normal-c-useast1a.tiktokv.com'
+                    'api_hostname': 'api22-normal-c-useast1a.tiktokv.com',
+                    'force_mobile_api': True
                 }
             }
         }
@@ -90,11 +99,26 @@ class TikTokDownloader(BaseDownloader):
             # Configure yt-dlp options
             ydl_opts = self._get_ydl_opts()
             self.update_progress('status_getting_info', 30)
+            ydl_opts['cookiesfrombrowser'] = ('chrome',)  # Try to use Chrome cookies as fallback
+
+            # Add retry mechanism
+            max_retries = 3
+            retry_delay = 2
+            last_error = None
 
             def extract_info():
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    logger.info("Attempting to extract info with yt-dlp")
-                    return ydl.extract_info(processed_url, download=False)
+                nonlocal last_error
+                for attempt in range(max_retries):
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            logger.info(f"Attempting to extract info with yt-dlp (attempt {attempt + 1}/{max_retries})")
+                            return ydl.extract_info(processed_url, download=False)
+                    except Exception as e:
+                        last_error = str(e)
+                        logger.warning(f"Attempt {attempt + 1} failed: {last_error}")
+                        if attempt < max_retries - 1:
+                            sleep(retry_delay)
+                raise DownloadError(f"All {max_retries} attempts failed. Last error: {last_error}")
 
             info = await asyncio.to_thread(extract_info)
             self.update_progress('status_getting_info', 60)
@@ -154,11 +178,26 @@ class TikTokDownloader(BaseDownloader):
             temp_filename = f"temp_{self.platform_id()}_{os.urandom(4).hex()}"
             ydl_opts['outtmpl'] = str(download_dir / f"{temp_filename}.%(ext)s")
             
-            self.update_progress('status_downloading', 20)
+            self.update_progress('status_downloading', 20) 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = await asyncio.to_thread(
-                    ydl.extract_info, processed_url, True
-                )
+                # Add retry mechanism for download as well
+                max_retries = 3
+                retry_delay = 2
+                last_error = None
+
+                for attempt in range(max_retries):
+                    try:
+                        info = await asyncio.to_thread(
+                            ydl.extract_info, processed_url, True
+                        )
+                        break
+                    except Exception as e:
+                        last_error = str(e)
+                        logger.warning(f"Download attempt {attempt + 1} failed: {last_error}")
+                        if attempt < max_retries - 1:
+                            sleep(retry_delay)
+                        else:
+                            raise DownloadError(f"All {max_retries} download attempts failed. Last error: {last_error}")
                 
                 if not info:
                     raise DownloadError("Failed to get content information")
@@ -201,8 +240,14 @@ class TikTokDownloader(BaseDownloader):
             error_msg = str(e)
             if "Private video" in error_msg:
                 raise DownloadError("This is a private video")
+            elif "status code 10204" in error_msg:
+                raise DownloadError("Video unavailable in your region. Trying mobile API...")
             elif "Login required" in error_msg:
                 raise DownloadError("Authentication required")
             else:
                 logger.error(f"[TikTok] Download failed: {error_msg}")
                 raise DownloadError(f"Download error: {error_msg}")
+
+
+
+
