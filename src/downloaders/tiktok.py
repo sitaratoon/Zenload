@@ -31,26 +31,28 @@ class TikTokDownloader(BaseDownloader):
             'extract_flat': False,
             'progress_hooks': [self._progress_hook],  # Add progress hook
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate', 
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
+                'User-Agent': 'TikTok 26.1.3 rv:261303 (iPhone; iOS 14.4.2; en_US) Cronet',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'sdk-version': '2'
             },
             'extractor_args': {
                 'TikTok': {
-                    'api_hostname': 'api22-normal-c-useast1a.tiktokv.com',
+                    'api_hostname': 'api-h2.tiktokv.com',
+                    'mobile_host': 'api-h2.tiktokv.com',
+                    'app_version': '26.1.3',
+                    'manifest_app_version': '26.1.3',
+                    'device_id': '7159727006915937282',
+                    'channel': 'tiktok_mobile',
+                    'priority_region': 'US',
+                    'user_region': 'US',
+                    'download_api': 'play_url',
                     'force_mobile_api': True
                 }
             }
         }
         if self.cookie_file.exists():
-            opts['cookiefile'] = str(self.cookie_file)
+            opts['cookiesfrombrowser'] = None  # Disable browser cookies
         return opts
 
     def can_handle(self, url: str) -> bool:
@@ -60,14 +62,15 @@ class TikTokDownloader(BaseDownloader):
         return bool(
             parsed.netloc and
             any(domain in parsed.netloc.lower() 
-                for domain in ['tiktok.com', 'www.tiktok.com', 'vm.tiktok.com'])
+                for domain in ['tiktok.com', 'www.tiktok.com', 'vm.tiktok.com', 
+                             'vt.tiktok.com'])  # Add support for vt.tiktok.com
         )
 
     def preprocess_url(self, url: str) -> str:
         """Clean and validate TikTok URL"""
         logger.info(f"Preprocessing TikTok URL: {url}")
-        if 'vm.tiktok.com' in url:
-            logger.info("Detected mobile share URL (vm.tiktok.com)")
+        if any(domain in url for domain in ['vm.tiktok.com', 'vt.tiktok.com']):
+            logger.info("Detected mobile share URL")
             return url
         
         patterns = [
@@ -99,7 +102,6 @@ class TikTokDownloader(BaseDownloader):
             # Configure yt-dlp options
             ydl_opts = self._get_ydl_opts()
             self.update_progress('status_getting_info', 30)
-            ydl_opts['cookiesfrombrowser'] = ('chrome',)  # Try to use Chrome cookies as fallback
 
             # Add retry mechanism
             max_retries = 3
@@ -233,7 +235,9 @@ class TikTokDownloader(BaseDownloader):
                 else:
                     metadata = f"TikTok | {likes}\nby <a href=\"{processed_url}\">{username}</a>"
 
-                self.update_progress('status_downloading', 100)
+                raise DownloadError("This video appears to be banned or restricted. "
+                                  "It may have been removed due to copyright or "
+                                  "community guidelines violations.")
                 return metadata, downloaded_file
                 
         except Exception as e:
@@ -241,12 +245,17 @@ class TikTokDownloader(BaseDownloader):
             if "Private video" in error_msg:
                 raise DownloadError("This is a private video")
             elif "status code 10204" in error_msg:
-                raise DownloadError("Video unavailable in your region. Trying mobile API...")
+                raise DownloadError("Video unavailable. Retrying with mobile API...")
             elif "Login required" in error_msg:
                 raise DownloadError("Authentication required")
             else:
                 logger.error(f"[TikTok] Download failed: {error_msg}")
                 raise DownloadError(f"Download error: {error_msg}")
+
+
+
+
+
 
 
 
