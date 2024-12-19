@@ -8,11 +8,12 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 class MessageHandlers:
-    def __init__(self, keyboard_builder, settings_manager, download_manager, localization):
+    def __init__(self, keyboard_builder, settings_manager, download_manager, localization, activity_logger=None):
         self.keyboard_builder = keyboard_builder
         self.settings_manager = settings_manager
         self.download_manager = download_manager
         self.localization = localization
+        self.activity_logger = activity_logger
         self._download_tasks = {}
 
     def get_message(self, user_id: int, key: str, **kwargs) -> str:

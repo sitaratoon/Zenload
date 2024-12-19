@@ -7,7 +7,7 @@ import asyncio
 import sys
 
 from .config import TOKEN, LOGGING_CONFIG, BASE_DIR
-from .database import UserSettingsManager
+from .database import UserSettingsManager, UserActivityLogger
 from .locales import Localization
 from .utils import KeyboardBuilder, DownloadManager
 from .handlers import CommandHandlers, MessageHandlers, CallbackHandlers, PaymentHandlers
@@ -22,6 +22,7 @@ class ZenloadBot:
         self.application = Application.builder().token(TOKEN).build()
         self.settings_manager = UserSettingsManager()
         self.localization = Localization()
+        self.activity_logger = UserActivityLogger(self.settings_manager.db)
         
         # Initialize utility classes
         self.keyboard_builder = KeyboardBuilder(
@@ -30,7 +31,8 @@ class ZenloadBot:
         )
         self.download_manager = DownloadManager(
             self.localization,
-            self.settings_manager
+            self.settings_manager,
+            activity_logger=self.activity_logger
         )
         
         # Initialize handlers
@@ -43,13 +45,15 @@ class ZenloadBot:
             self.keyboard_builder,
             self.settings_manager,
             self.download_manager,
-            self.localization
+            self.localization,
+            activity_logger=self.activity_logger
         )
         self.callback_handlers = CallbackHandlers(
             self.keyboard_builder,
             self.settings_manager,
             self.download_manager,
-            self.localization
+            self.localization,
+            activity_logger=self.activity_logger
         )
         self.payment_handlers = PaymentHandlers(
             self.localization,

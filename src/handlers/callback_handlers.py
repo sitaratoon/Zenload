@@ -7,11 +7,12 @@ from ..downloaders import DownloaderFactory
 logger = logging.getLogger(__name__)
 
 class CallbackHandlers:
-    def __init__(self, keyboard_builder, settings_manager, download_manager, localization):
+    def __init__(self, keyboard_builder, settings_manager, download_manager, localization, activity_logger=None):
         self.keyboard_builder = keyboard_builder
         self.settings_manager = settings_manager
         self.download_manager = download_manager
         self.localization = localization
+        self.activity_logger = activity_logger
 
     async def _is_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> bool:
         """Check if user is an admin in the specified chat"""
@@ -74,13 +75,17 @@ class CallbackHandlers:
         
         # Clear stored URL
         context.user_data.clear()
-        
+        # Log quality selection if logger is available
+        if self.activity_logger:
+            self.activity_logger.log_quality_selection(user_id, url, quality)
+
         # Get downloader
         downloader = DownloaderFactory.get_downloader(url)
         if not downloader:
             await query.edit_message_text(
                 self.get_message(user_id, 'invalid_url', chat_id, is_admin)
             )
+            return
             return
         
         # Create fake update object for download manager

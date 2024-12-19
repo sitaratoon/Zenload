@@ -1,6 +1,6 @@
 from typing import Optional
 from datetime import datetime
-from pymongo import MongoClient
+from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.database import Database
 import os
 import logging
@@ -15,13 +15,13 @@ db: Database = client.zenload
 @dataclass
 class UserSettings:
     user_id: int
-    language: str = 'ru'
+    language: str = 'en'
     username: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone_number: Optional[str] = None
     is_premium: bool = False
-    default_quality: str = 'ask'
+    default_quality: str = 'best'
     created_at: datetime = None
     updated_at: datetime = None
 
@@ -29,10 +29,143 @@ class UserSettings:
 class GroupSettings:
     group_id: int
     admin_id: int
-    language: str = 'ru'
-    default_quality: str = 'ask'
+    language: str = 'en'
+    default_quality: str = 'best'
     created_at: datetime = None
     updated_at: datetime = None
+
+@dataclass
+class UserActivity:
+    user_id: int
+    action_type: str  # download_start, download_complete, quality_select
+    timestamp: datetime
+    url: str
+    platform: str
+    status: str = None  # success, failed
+    error_type: str = None
+    quality: str = None
+    file_type: str = None
+    file_size: int = None
+    processing_time: float = None
+
+class UserActivityLogger:
+    def __init__(self, db: Database):
+        self.db = db
+        self._init_collection()
+
+    def _init_collection(self):
+        """Initialize MongoDB collection and indexes"""
+        # Create indexes for efficient querying
+        self.db.user_activity.create_index([("user_id", ASCENDING), ("timestamp", DESCENDING)])
+        self.db.user_activity.create_index([("platform", ASCENDING)])
+        self.db.user_activity.create_index([("status", ASCENDING)])
+        self.db.user_activity.create_index([("timestamp", DESCENDING)])
+
+    def log_download_attempt(self, user_id: int, url: str, platform: str):
+        """Log when user attempts to download content"""
+        activity = UserActivity(
+            user_id=user_id,
+            action_type="download_start",
+            timestamp=datetime.utcnow(),
+            url=url,
+            platform=platform
+        )
+        self.db.user_activity.insert_one(activity.__dict__)
+        return activity
+
+    def log_download_complete(self, user_id: int, url: str, success: bool,
+                            file_type: str = None, file_size: int = None,
+                            processing_time: float = None, error: str = None):
+        """Log when download completes (successfully or with error)"""
+        activity = UserActivity(
+            user_id=user_id,
+            action_type="download_complete",
+            timestamp=datetime.utcnow(),
+            url=url,
+            platform=self._extract_platform(url),
+            status="success" if success else "failed",
+            error_type=error,
+            file_type=file_type,
+            file_size=file_size,
+            processing_time=processing_time
+        )
+        self.db.user_activity.insert_one(activity.__dict__)
+        return activity
+
+    def log_quality_selection(self, user_id: int, url: str, quality: str):
+        """Log when user selects quality"""
+        activity = UserActivity(
+            user_id=user_id,
+            action_type="quality_select",
+            timestamp=datetime.utcnow(),
+            url=url,
+            platform=self._extract_platform(url),
+            quality=quality
+        )
+        self.db.user_activity.insert_one(activity.__dict__)
+        return activity
+
+    def _extract_platform(self, url: str) -> str:
+        """Extract platform name from URL"""
+        if "youtube.com" in url or "youtu.be" in url:
+            return "youtube"
+        elif "instagram.com" in url:
+            return "instagram"
+        elif "tiktok.com" in url:
+            return "tiktok"
+        elif "pinterest.com" in url:
+            return "pinterest"
+        elif "disk.yandex.ru" in url:
+            return "yandex"
+        return "unknown"
+
+    def get_user_stats(self, user_id: int, days: int = 30) -> dict:
+        """Get statistics for a specific user"""
+        start_date = datetime.utcnow() - timedelta(days=days)
+        
+        pipeline = [
+            {"$match": {
+                "user_id": user_id,
+                "timestamp": {"$gte": start_date}
+            }},
+            {"$group": {
+                "_id": {
+                    "platform": "$platform",
+                    "status": "$status"
+                },
+                "count": {"$sum": 1},
+                "avg_processing_time": {"$avg": "$processing_time"}
+            }}
+        ]
+        
+        results = self.db.user_activity.aggregate(pipeline)
+        
+        stats = {
+            "total_downloads": 0,
+            "successful_downloads": 0,
+            "failed_downloads": 0,
+            "platforms": defaultdict(lambda: {"success": 0, "failed": 0}),
+            "avg_processing_time": 0
+        }
+        
+        for result in results:
+            platform = result["_id"]["platform"]
+            status = result["_id"]["status"]
+            count = result["count"]
+            
+            if status == "success":
+                stats["successful_downloads"] += count
+                stats["platforms"][platform]["success"] = count
+            elif status == "failed":
+                stats["failed_downloads"] += count
+                stats["platforms"][platform]["failed"] = count
+                
+            if result["avg_processing_time"]:
+                stats["avg_processing_time"] = result["avg_processing_time"]
+        
+        stats["total_downloads"] = stats["successful_downloads"] + stats["failed_downloads"]
+        
+        return stats
 
 class UserSettingsManager:
     def __init__(self):

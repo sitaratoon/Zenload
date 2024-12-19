@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 
 class DownloadWorker:
     """Worker class to handle individual downloads"""
-    def __init__(self, localization, settings_manager, session: aiohttp.ClientSession):
+    def __init__(self, localization, settings_manager, session: aiohttp.ClientSession, activity_logger=None):
         self.localization = localization
         self.settings_manager = settings_manager
         self.session = session
+        self.activity_logger = activity_logger
         self._status_queue = asyncio.Queue()
         self._stop_event = asyncio.Event()
         self._current_message: Optional[Message] = None
@@ -103,6 +104,11 @@ class DownloadWorker:
         """Process content download with error handling and cleanup"""
         user_id = update.effective_user.id
         file_path = None
+        start_time = time.time()
+
+        # Log download attempt if logger is available
+        if self.activity_logger:
+            self.activity_logger.log_download_attempt(user_id, url, downloader.__class__.__name__.lower())
 
         try:
             logger.info(f"Starting download for URL: {url}")
@@ -171,6 +177,26 @@ class DownloadWorker:
             logger.error(f"Unexpected error processing {url}: {e}", exc_info=True)
 
         finally:
+            # Calculate processing time
+            processing_time = time.time() - start_time
+            
+            # Log download completion if logger is available
+            if self.activity_logger:
+                success = file_path is not None  # If we have a file_path, download was successful
+                file_type = 'audio' if file_path and file_path.suffix.lower() in ['.mp3', '.m4a', '.wav'] else 'video'
+                file_size = Path(file_path).stat().st_size if file_path else None
+                error_type = str(e) if 'e' in locals() else None
+                
+                self.activity_logger.log_download_complete(
+                    user_id=user_id,
+                    url=url,
+                    success=success,
+                    file_type=file_type,
+                    file_size=file_size,
+                    processing_time=processing_time,
+                    error=error_type
+                )
+
             # Stop status update task
             self._stop_event.set()
             if self._status_task:
@@ -204,11 +230,12 @@ class DownloadWorker:
 
 class DownloadManager:
     """High-performance download manager with optimized concurrency"""
-    def __init__(self, localization, settings_manager, max_concurrent_downloads=50, max_downloads_per_user=5):
+    def __init__(self, localization, settings_manager, max_concurrent_downloads=50, max_downloads_per_user=5, activity_logger=None):
         self.localization = localization
         self.settings_manager = settings_manager
         self.max_concurrent_downloads = max_concurrent_downloads
         self.max_downloads_per_user = max_downloads_per_user
+        self.activity_logger = activity_logger
         
         # Initialize as None, will create when needed
         self.connector = None
@@ -310,14 +337,14 @@ class DownloadManager:
             # Check user's concurrent downloads limit
             if len(self.active_downloads.get(user_id, {})) >= self.max_downloads_per_user:
                 await status_message.edit_text(
-                    DownloadWorker(self.localization, self.settings_manager, self.session).get_message(
+                    DownloadWorker(self.localization, self.settings_manager, self.session, self.activity_logger).get_message(
                         user_id, 'error_too_many_downloads'
                     )
                 )
                 return
             
             # Create worker and queue download
-            worker = DownloadWorker(self.localization, self.settings_manager, self.session)
+            worker = DownloadWorker(self.localization, self.settings_manager, self.session, self.activity_logger)
             priority = len(self.active_downloads.get(user_id, {}))  # Lower number = higher priority
             
             await self.download_queue.put((
