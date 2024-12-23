@@ -100,21 +100,36 @@ class ZenloadBot:
         logger.info("Stopping bot...")
         
         try:
+            # Ensure we're in the right event loop
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
             # Stop accepting new updates
             if self.application.updater:
                 await self.application.updater.stop()
             
-            # Cleanup download manager
-            await self.download_manager.cleanup()
+            # Cleanup download manager with timeout
+            try:
+                await asyncio.wait_for(self.download_manager.cleanup(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("Download manager cleanup timed out")
+            except Exception as e:
+                logger.error(f"Error during download manager cleanup: {e}")
             
             # Stop application
             if self.application.running:
-                await self.application.stop()
-                await self.application.shutdown()
+                try:
+                    await asyncio.wait_for(self.application.stop(), timeout=5.0)
+                    await asyncio.wait_for(self.application.shutdown(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Application shutdown timed out")
             
             logger.info("Bot stopped successfully")
         except Exception as e:
-            logger.error(f"Error stopping bot: {e}")
+            logger.error(f"Error stopping bot: {e}", exc_info=True)
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""

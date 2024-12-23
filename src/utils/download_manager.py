@@ -259,25 +259,57 @@ class DownloadManager:
     async def _create_queue(self):
         """Create a new queue bound to the current event loop"""
         try:
-            self._loop = asyncio.get_running_loop()
+            # Get current event loop or create new one if needed
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+
+            # Safely cleanup old queue if it exists
             if self.download_queue:
-                # Wait for existing queue to empty
                 try:
-                    await asyncio.wait_for(self.download_queue.join(), timeout=5.0)
-                except (asyncio.TimeoutError, Exception):
-                    pass
+                    if not self.download_queue.empty():
+                        await asyncio.wait_for(self.download_queue.join(), timeout=5.0)
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning(f"Could not properly clean old queue: {e}")
+                self.download_queue = None
+
             # Create new queue bound to current event loop
             self.download_queue = asyncio.PriorityQueue()
+            logger.info("Successfully created new download queue")
         except Exception as e:
             logger.error(f"Error creating queue: {e}")
-            raise
+            # Don't raise, let the system try to recover
+            self.download_queue = None
 
     async def _ensure_initialized(self):
         """Ensure manager is initialized with event loop"""
-        if not self._loop or self._loop != asyncio.get_running_loop():
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(current_loop)
+            current_loop = asyncio.get_running_loop()
+
+        # Check if we need to reinitialize
+        if not self._loop or self._loop != current_loop or not self.session or self.session.closed:
+            # Cleanup old resources if they exist
+            if self.session and not self.session.closed:
+                await self.session.close()
+            
+            if self._queue_processor_task:
+                self._queue_processor_running = False
+                self._queue_processor_task.cancel()
+                try:
+                    await self._queue_processor_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            # Initialize new resources
             self.connector = aiohttp.TCPConnector(
                 limit=self.max_concurrent_downloads,
-                limit_per_host=20,  # Increased from 10 to 20
+                limit_per_host=20,
                 enable_cleanup_closed=True,
                 force_close=True,
                 ttl_dns_cache=300
@@ -291,32 +323,47 @@ class DownloadManager:
                 }
             )
             
-            self._loop = asyncio.get_running_loop()
+            self._loop = current_loop
             self._downloads_lock = asyncio.Lock()
+            
+            # Create new queue and start processor
             await self._create_queue()
             self._queue_processor_running = True
             self._queue_processor_task = self._loop.create_task(self._process_queue())
+            
+            logger.info("Download manager successfully reinitialized")
 
     async def _process_queue(self):
         """Process the download queue"""
         while self._queue_processor_running:
             try:
-                _, worker, args = await self.download_queue.get()
+                if not self.download_queue:
+                    await self._create_queue()
+                    if not self.download_queue:
+                        logger.error("Failed to create queue, retrying in 1 second")
+                        await asyncio.sleep(1)
+                        continue
+
                 try:
-                    await worker.process_download(*args)
-                finally:
-                    self.download_queue.task_done()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error processing download queue: {e}")
-                # Recreate queue if it's bound to wrong event loop
-                if "is bound to a different event loop" in str(e):
+                    _, worker, args = await self.download_queue.get()
                     try:
-                        await self._create_queue()
-                    except Exception as create_error:
-                        logger.error(f"Error recreating queue: {create_error}")
+                        await worker.process_download(*args)
+                    finally:
+                        self.download_queue.task_done()
+                except asyncio.QueueEmpty:
+                    await asyncio.sleep(0.1)
                     continue
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"Error processing download: {e}")
+                    if "is bound to a different event loop" in str(e):
+                        self.download_queue = None  # Force queue recreation
+                        await asyncio.sleep(0.1)  # Prevent tight loop
+                    continue
+            except Exception as e:
+                logger.error(f"Critical error in queue processor: {e}")
+                await asyncio.sleep(1)  # Prevent tight loop on critical errors
 
     async def process_download(self, downloader, url: str, update: Update, status_message: Message, format_id: str = None) -> None:
         """Process download request with optimized performance"""
