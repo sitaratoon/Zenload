@@ -1,6 +1,8 @@
 import logging
 import logging.config
 from pathlib import Path
+import os
+import fcntl
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, PreCheckoutQueryHandler, filters
 import signal
 import asyncio
@@ -18,6 +20,38 @@ logger = logging.getLogger(__name__)
 
 class ZenloadBot:
     def __init__(self):
+        self.lock_file = None
+        self.lock_fd = None
+        
+        # Try to acquire lock
+        try:
+            pid_file = Path("/var/run/zenload.pid")  # Standard Unix PID file location
+            if not pid_file.parent.exists():
+                pid_file = Path(BASE_DIR) / "zenload.pid"  # Fallback to app directory
+            
+            self.lock_file = pid_file
+            self.lock_fd = os.open(str(self.lock_file), os.O_RDWR | os.O_CREAT, 0o644)
+            
+            # Try non-blocking lock
+            try:
+                fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # Write PID to file
+                os.truncate(self.lock_fd, 0)
+                os.write(self.lock_fd, str(os.getpid()).encode())
+            except (IOError, OSError) as e:
+                logger.error(f"Another instance is already running (Error: {e})")
+                os.close(self.lock_fd)
+                sys.exit(1)
+                
+        except Exception as e:
+            logger.error(f"Error acquiring lock: {e}")
+            if self.lock_fd:
+                try:
+                    os.close(self.lock_fd)
+                except:
+                    pass
+            sys.exit(1)
+            
         # Initialize core components
         self.application = Application.builder().token(TOKEN).build()
         self.settings_manager = UserSettingsManager()
@@ -138,17 +172,69 @@ class ZenloadBot:
         except Exception as e:
             logger.error(f"Error stopping bot: {e}", exc_info=True)
         finally:
+            # Release lock file and cleanup PID file
+            if self.lock_fd is not None:
+                try:
+                    # Release lock
+                    fcntl.flock(self.lock_fd, fcntl.LOCK_UN)
+                    os.close(self.lock_fd)
+                    # Remove PID file if it exists and belongs to us
+                    if self.lock_file and self.lock_file.exists():
+                        try:
+                            pid = int(self.lock_file.read_text().strip())
+                            if pid == os.getpid():
+                                self.lock_file.unlink()
+                        except (ValueError, OSError) as e:
+                            logger.warning(f"Error cleaning up PID file: {e}")
+                except Exception as e:
+                    logger.error(f"Error releasing lock: {e}")
+            
             self._stopping = False  # Reset stopping flag
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
         if self._stopping:
-            logger.info("Forced shutdown")
+            logger.info("Forced shutdown initiated")
+            # Release lock file on forced shutdown
+            if self.lock_fd is not None:
+                try:
+                    # Release lock and cleanup PID file
+                    fcntl.flock(self.lock_fd, fcntl.LOCK_UN)
+                    os.close(self.lock_fd)
+                    if self.lock_file and self.lock_file.exists():
+                        try:
+                            pid = int(self.lock_file.read_text().strip())
+                            if pid == os.getpid():
+                                self.lock_file.unlink()
+                        except (ValueError, OSError) as e:
+                            logger.warning(f"Error cleaning up PID file during forced shutdown: {e}")
+                except Exception as e:
+                    logger.error(f"Error releasing lock during forced shutdown: {e}")
             sys.exit(1)
         
-        logger.info(f"Received signal {signum}")
-        loop = asyncio.get_event_loop()
-        loop.create_task(self.stop())
+        logger.info(f"Received signal {signum}, initiating graceful shutdown")
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except Exception as e:
+            logger.error(f"Error getting event loop in signal handler: {e}")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        try:
+            loop.create_task(self.stop())
+        except Exception as e:
+            logger.error(f"Error creating stop task: {e}")
+            # Force cleanup if we can't stop gracefully
+            if self.lock_fd is not None:
+                try:
+                    fcntl.flock(self.lock_fd, fcntl.LOCK_UN)
+                    os.close(self.lock_fd)
+                except Exception:
+                    pass
+            sys.exit(1)
 
     def run(self):
         """Start the bot"""
