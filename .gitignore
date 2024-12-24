@@ -29,3 +29,7 @@ cookies/*
 
 # Database
 zenload.db
+backup_db.py
+.gitignore
+restore_db.py
+backups
