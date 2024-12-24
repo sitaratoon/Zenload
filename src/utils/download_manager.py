@@ -286,84 +286,140 @@ class DownloadManager:
     async def _ensure_initialized(self):
         """Ensure manager is initialized with event loop"""
         try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(current_loop)
-            current_loop = asyncio.get_running_loop()
+            # Get or create event loop
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(current_loop)
+                current_loop = asyncio.get_running_loop()
 
-        # Check if we need to reinitialize
-        if not self._loop or self._loop != current_loop or not self.session or self.session.closed:
-            # Cleanup old resources if they exist
-            if self.session and not self.session.closed:
-                await self.session.close()
-            
-            if self._queue_processor_task:
-                self._queue_processor_running = False
-                self._queue_processor_task.cancel()
-                try:
-                    await self._queue_processor_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+            needs_init = (
+                not self._loop or
+                self._loop != current_loop or
+                not self.session or
+                self.session.closed
+            )
 
-            # Initialize new resources
-            self.connector = aiohttp.TCPConnector(
-                limit=self.max_concurrent_downloads,
-                limit_per_host=20,
-                enable_cleanup_closed=True,
-                force_close=True,
-                ttl_dns_cache=300
-            )
-            
-            self.session = aiohttp.ClientSession(
-                connector=self.connector,
-                timeout=aiohttp.ClientTimeout(total=300),
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
-            )
-            
-            self._loop = current_loop
-            self._downloads_lock = asyncio.Lock()
-            
-            # Create new queue and start processor
-            await self._create_queue()
-            self._queue_processor_running = True
-            self._queue_processor_task = self._loop.create_task(self._process_queue())
-            
-            logger.info("Download manager successfully reinitialized")
+            if needs_init:
+                logger.info("Initializing download manager resources...")
+                
+                # Cleanup existing resources
+                await self._cleanup_resources()
+                
+                # Initialize connector with optimized settings
+                self.connector = aiohttp.TCPConnector(
+                    limit=self.max_concurrent_downloads,
+                    limit_per_host=20,
+                    enable_cleanup_closed=True,
+                    force_close=True,
+                    ttl_dns_cache=300,
+                    ssl=False  # Disable SSL verification for better performance
+                )
+                
+                # Initialize session with optimized settings
+                self.session = aiohttp.ClientSession(
+                    connector=self.connector,
+                    timeout=aiohttp.ClientTimeout(
+                        total=300,
+                        connect=60,
+                        sock_read=60,
+                        sock_connect=60
+                    ),
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': '*/*',
+                        'Accept-Encoding': 'gzip, deflate',
+                        'Connection': 'keep-alive'
+                    }
+                )
+                
+                # Initialize core components
+                self._loop = current_loop
+                self._downloads_lock = asyncio.Lock()
+                
+                # Initialize queue system
+                await self._create_queue()
+                self._queue_processor_running = True
+                self._queue_processor_task = self._loop.create_task(self._process_queue())
+                
+                logger.info("Download manager successfully initialized")
+                
+        except Exception as e:
+            logger.error(f"Error initializing download manager: {e}")
+            # Attempt cleanup on initialization failure
+            await self._cleanup_resources()
+            raise
+
+    async def _cleanup_resources(self):
+        """Clean up existing resources"""
+        # Stop queue processor
+        if self._queue_processor_task and not self._queue_processor_task.done():
+            self._queue_processor_running = False
+            self._queue_processor_task.cancel()
+            try:
+                await asyncio.wait_for(self._queue_processor_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception) as e:
+                logger.warning(f"Error stopping queue processor: {e}")
+
+        # Close existing session
+        if self.session and not self.session.closed:
+            try:
+                await asyncio.wait_for(self.session.close(), timeout=5.0)
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning(f"Error closing session: {e}")
+
+        # Clear state
+        self.session = None
+        self.connector = None
+        self._queue_processor_task = None
+        self.download_queue = None
 
     async def _process_queue(self):
         """Process the download queue"""
         while self._queue_processor_running:
             try:
+                # Ensure we have a valid queue
                 if not self.download_queue:
-                    await self._create_queue()
-                    if not self.download_queue:
-                        logger.error("Failed to create queue, retrying in 1 second")
+                    try:
+                        await self._create_queue()
+                    except Exception as e:
+                        logger.error(f"Failed to create queue: {e}")
                         await asyncio.sleep(1)
                         continue
 
+                # Get and process download task
                 try:
-                    _, worker, args = await self.download_queue.get()
-                    try:
-                        await worker.process_download(*args)
-                    finally:
-                        self.download_queue.task_done()
-                except asyncio.QueueEmpty:
-                    await asyncio.sleep(0.1)
+                    _, worker, args = await asyncio.wait_for(self.download_queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
                     continue
+                except Exception as e:
+                    if "different event loop" in str(e):
+                        logger.warning("Queue bound to different event loop, recreating...")
+                        self.download_queue = None
+                        await asyncio.sleep(0.1)
+                    else:
+                        logger.error(f"Error getting from queue: {e}")
+                    continue
+
+                # Process the download
+                try:
+                    await worker.process_download(*args)
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
                     logger.error(f"Error processing download: {e}")
-                    if "is bound to a different event loop" in str(e):
-                        self.download_queue = None  # Force queue recreation
-                        await asyncio.sleep(0.1)  # Prevent tight loop
-                    continue
+                finally:
+                    try:
+                        self.download_queue.task_done()
+                    except Exception as e:
+                        logger.error(f"Error marking task done: {e}")
+
+            except asyncio.CancelledError:
+                break
             except Exception as e:
                 logger.error(f"Critical error in queue processor: {e}")
-                await asyncio.sleep(1)  # Prevent tight loop on critical errors
+                await asyncio.sleep(1)
 
     async def process_download(self, downloader, url: str, update: Update, status_message: Message, format_id: str = None) -> None:
         """Process download request with optimized performance"""
@@ -402,37 +458,65 @@ class DownloadManager:
 
     async def cleanup(self):
         """Cleanup resources on shutdown"""
-        if not self._loop:
-            return            
-            
-        # Stop queue processor
-        self._queue_processor_running = False
-        if self._queue_processor_task:
-            self._queue_processor_task.cancel()
+        try:
+            # Ensure we're in a valid event loop
             try:
-                await self._queue_processor_task
-            except asyncio.CancelledError:
-                pass
-        
-        # Wait for queue to empty
-        if self.download_queue:
-            try:
-                await asyncio.wait_for(self.download_queue.join(), timeout=5.0)
-            except Exception:
-                pass
-        
-        # Cancel all active downloads
-        if self._downloads_lock:
-            async with self._downloads_lock:
-                for downloads in self.active_downloads.values():
-                    for task in downloads.values():
-                        task.cancel()
-        
-        # Close session
-        if self.session:
-            await self.session.close()
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
             
-        self._loop = None
+            # Stop queue processor first
+            self._queue_processor_running = False
+            if self._queue_processor_task and not self._queue_processor_task.done():
+                self._queue_processor_task.cancel()
+                try:
+                    await asyncio.wait_for(self._queue_processor_task, timeout=5.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception) as e:
+                    logger.warning(f"Queue processor cleanup error: {e}")
+            
+            # Wait for queue to empty with timeout
+            if self.download_queue and not self.download_queue.empty():
+                try:
+                    await asyncio.wait_for(self.download_queue.join(), timeout=5.0)
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning(f"Queue cleanup timeout: {e}")
+            
+            # Cancel active downloads
+            if self._downloads_lock:
+                try:
+                    async with self._downloads_lock:
+                        for downloads in self.active_downloads.values():
+                            for task in downloads.values():
+                                if not task.done():
+                                    task.cancel()
+                                    try:
+                                        await asyncio.wait_for(task, timeout=2.0)
+                                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                                        pass
+                except Exception as e:
+                    logger.error(f"Error cancelling downloads: {e}")
+            
+            # Close session
+            if self.session and not self.session.closed:
+                try:
+                    await asyncio.wait_for(self.session.close(), timeout=5.0)
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning(f"Session cleanup error: {e}")
+            
+            # Clear state
+            self.download_queue = None
+            self._queue_processor_task = None
+            self.session = None
+            self.connector = None
+            self._loop = None
+            self.active_downloads.clear()
+            
+            logger.info("Download manager cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"Fatal error during cleanup: {e}")
+            raise
 
 
 

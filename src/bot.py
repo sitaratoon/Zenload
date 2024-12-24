@@ -100,20 +100,19 @@ class ZenloadBot:
         logger.info("Stopping bot...")
         
         try:
-            # Ensure we're in the right event loop
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            # Stop accepting new updates
+            # Stop accepting new updates first
             if self.application.updater:
-                await self.application.updater.stop()
+                try:
+                    await asyncio.wait_for(self.application.updater.stop(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Updater stop timed out")
+                except Exception as e:
+                    logger.error(f"Error stopping updater: {e}")
             
-            # Cleanup download manager with timeout
+            # Cleanup download manager
             try:
-                await asyncio.wait_for(self.download_manager.cleanup(), timeout=10.0)
+                if hasattr(self.download_manager, 'cleanup'):
+                    await asyncio.wait_for(self.download_manager.cleanup(), timeout=10.0)
             except asyncio.TimeoutError:
                 logger.warning("Download manager cleanup timed out")
             except Exception as e:
@@ -123,13 +122,23 @@ class ZenloadBot:
             if self.application.running:
                 try:
                     await asyncio.wait_for(self.application.stop(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Application stop timed out")
+                except Exception as e:
+                    logger.error(f"Error stopping application: {e}")
+                
+                try:
                     await asyncio.wait_for(self.application.shutdown(), timeout=5.0)
                 except asyncio.TimeoutError:
                     logger.warning("Application shutdown timed out")
+                except Exception as e:
+                    logger.error(f"Error during application shutdown: {e}")
             
             logger.info("Bot stopped successfully")
         except Exception as e:
             logger.error(f"Error stopping bot: {e}", exc_info=True)
+        finally:
+            self._stopping = False  # Reset stopping flag
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
@@ -150,6 +159,11 @@ class ZenloadBot:
         signal.signal(signal.SIGTERM, self._signal_handler)
         
         try:
+            # Create new event loop and set it as the current one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Run the application
             self.application.run_polling(drop_pending_updates=True)
         except (KeyboardInterrupt, SystemExit):
             logger.info("Bot stopped by user")
@@ -159,7 +173,25 @@ class ZenloadBot:
         finally:
             # Ensure cleanup is performed
             if not self._stopping:
-                loop = asyncio.get_event_loop()
-                loop.run_until_complete(self.stop())
+                try:
+                    # Create new event loop for cleanup if needed
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_closed():
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    # Run cleanup
+                    loop.run_until_complete(self.stop())
+                except Exception as e:
+                    logger.error(f"Error during cleanup: {e}")
+                finally:
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
 
 
