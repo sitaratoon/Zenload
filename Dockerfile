@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -9,5 +10,8 @@ RUN python -m venv /opt/venv && \
 
 COPY . .
 ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "main.py"]
+CMD ["python", "-u", "main.py"]
+
+LABEL org.opencontainers.image.source=https://github.com/RoninReilly/Zenload
